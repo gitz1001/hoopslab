@@ -1,0 +1,95 @@
+# Hoops Lab
+
+A local NBA stats system: a data pipeline that pulls free public data into SQLite, and a
+website/dashboard on top of it for browsing players, teams, standings, leaderboards and
+records, plus an analysis section that goes from simple comparisons to models.
+
+## Quick start
+
+Needs Python 3.10+.
+
+```bash
+pip install -r requirements.txt
+python -m nbastats update                       # latest season (2025-26), ~1 minute
+python -m app                                   # http://127.0.0.1:8050
+```
+
+Load more seasons whenever you like; everything is cached, so re-runs are free:
+
+```bash
+python -m nbastats update --from 1996-97        # every season NBA.com covers, ~30 minutes
+python -m nbastats history                      # 1979-80 to 1995-96 from Basketball Reference
+python -m nbastats update --seasons 2026-27     # a new season once it's played (add --refresh mid-season)
+```
+
+`update` flags: `--no-bref`, `--no-onoff` (skips 30 calls per season), `--no-playoffs`,
+`--refresh` (ignore the raw-response cache).
+
+## Data sources
+
+| Source | How | What it gives |
+| --- | --- | --- |
+| NBA.com stats | [`nba_api`](https://github.com/swar/nba_api), 0.7 s between calls | player and team totals, NBA.com advanced (ratings, USG%, AST%, rebound %, PIE, pace), four factors, opponent stats, standings, every player and team box score (regular season + playoffs), on/off court splits for every team, all-time career leaders, franchise history, player index |
+| Basketball Reference | scraped, one page per 4 s (their limit is 20/min) | PER, Win Shares, BPM/OBPM/DBPM, VORP, STL%/BLK%, positions, awards; pre-1996 season totals |
+
+Raw responses are cached in `data/raw/` (JSON for NBA.com, HTML for Basketball Reference),
+so the database can be rebuilt without touching the network. Basketball Reference players
+are matched to NBA.com IDs by normalized name (accents, punctuation and Jr./III removed),
+falling back to last name + first initial.
+
+## Database (`data/nba.db`)
+
+| Table | Grain |
+| --- | --- |
+| `player_season_full` | one wide row per player-season: totals, per game, per 36, per 100 possessions, shooting, NBA.com advanced, Basketball Reference advanced, on/off, our own PER and Game Score |
+| `team_season_full` | team-season: record, ratings, four factors, standings splits, Pythagorean wins and luck |
+| `league_season` | league averages per season (pace, ORtg, TS%, 3PA rate, …) |
+| `player_game`, `team_game` | every box score line, with Game Score |
+| `player_onoff` | on-court vs off-court team ratings per player-team-season |
+| `player_season_base`, `player_season_adv`, `player_season_playoffs`, `team_season_base`, `team_season_adv`, `standings`, `bref_advanced` | raw source tables |
+| `bref_history` | pre-1996 Basketball Reference totals + advanced |
+| `players`, `teams`, `franchise_history`, `alltime_leaders` | reference data |
+
+## Metrics we compute ourselves
+
+- **TS%, eFG%, 3PA rate, FTA rate, per 36, per 100 possessions** from box totals.
+- **PER** from scratch with Hollinger's formula (league factor, VOP, DRB%, pace adjustment,
+  normalized to 15). It matches Basketball Reference's PER at r = 0.999.
+- **Game Score** for every box score line.
+- **Pythagorean wins** (exponent 13.91) and luck = actual − expected wins.
+
+## Website
+
+- **Dashboard**: league KPIs vs last season, leaders, team ORtg/DRtg map, net rating ranking.
+- **Players**: sortable, filterable table with Basic / Shooting / Advanced / Per 36 / Per 100 / Impact / Totals views.
+- **Player page**: game log chart with rolling average, percentile profile, career arc of any stat, most similar player-seasons, season-by-season, playoffs, pre-1996 history, full game log.
+- **Teams, team page**: ratings, four factors, season flow, franchise rating history, roster, on/off.
+- **Standings** with Pythagorean wins and luck.
+- **Leaders**: any stat, one season or all seasons.
+- **Records**: single-game highs, triple-doubles, best teams, team game records, all-time career leaders.
+- **Trends**: how pace, 3-point volume, efficiency and more changed over the years.
+- **Analysis**
+  - *Compare*: up to four player-seasons, radar of percentiles plus a stat table.
+  - *Stat explorer*: any stat vs any stat for players or teams, with correlation.
+  - *Archetypes*: k-means clustering on eleven style features, PCA map, auto-named clusters.
+  - *Projections*: Marcel-style next-season forecasts (5/4/3 weights, regression to the mean, age adjustment).
+  - *Aging curves*: delta-method curves for any rate stat.
+  - *What wins*: four-factor regression on win% and a Pythagorean luck chart.
+
+## Layout
+
+```
+nbastats/            data pipeline (python -m nbastats)
+  sources/nbacom.py  NBA.com via nba_api, cached
+  sources/bref.py    Basketball Reference scraper, cached and rate limited
+  metrics.py         derived metrics (PER, per-100, Game Score, Pythagorean, league averages)
+  build.py           fetch -> store raw -> build derived tables
+app/                 Flask API + static single-page site (python -m app)
+  server.py          JSON endpoints under /api
+  analysis.py        clustering, similarity, projections, aging curves, win model
+  catalog.py         stat labels and formats
+  static/            index.html, app.js, style.css (Chart.js from a CDN)
+data/                database and raw cache (not committed)
+```
+
+Please respect the sources: keep the built-in delays, and don't hammer Basketball Reference.

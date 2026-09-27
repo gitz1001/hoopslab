@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "hoopslab", "runtimeExecutable": "python", "runtimeArgs": ["-m", "app"], "port": 8050 }
+  ]
+}

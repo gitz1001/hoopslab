@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hoops Lab</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="top-inner">
+      <a class="brand" href="#/">Hoops<span>Lab</span></a>
+      <nav class="main" id="nav">
+        <a href="#/" data-r="">Dashboard</a>
+        <a href="#/players" data-r="players">Players</a>
+        <a href="#/teams" data-r="teams">Teams</a>
+        <a href="#/standings" data-r="standings">Standings</a>
+        <a href="#/leaders" data-r="leaders">Leaders</a>
+        <a href="#/records" data-r="records">Records</a>
+        <a href="#/trends" data-r="trends">Trends</a>
+        <a href="#/analysis" data-r="analysis">Analysis</a>
+      </nav>
+      <div class="top-tools">
+        <select id="season" title="Season"></select>
+        <div class="search">
+          <input type="text" id="q" placeholder="Search players, teams" autocomplete="off">
+          <div class="results" id="qres"></div>
+        </div>
+      </div>
+    </div>
+  </header>
+  <main id="view"><div class="loading">Loading…</div></main>
+  <script src="/app.js"></script>
+</body>
+</html>
