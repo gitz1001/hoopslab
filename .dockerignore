@@ -1,0 +1,7 @@
+# Only the code and the exported database go into the image.
+*
+!nbastats/
+!app/
+!requirements-serve.txt
+!data/nba_serve.db
+**/__pycache__

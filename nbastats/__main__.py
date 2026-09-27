@@ -6,11 +6,12 @@
     python -m nbastats history --from 1979-80 --to 1995-96   # Basketball Reference only
     python -m nbastats models --lineups            # Elo, SRS, RAPM, impact, WAR
     python -m nbastats predict --sims 10000        # next-season projections and simulation
+    python -m nbastats export                      # slim read-only database for the website
 """
 import argparse
 
 from . import build, db
-from .config import LATEST_SEASON, season_range
+from .config import LATEST_SEASON, season_in_progress, season_range
 from .sources import bref, nbacom
 
 
@@ -33,6 +34,9 @@ def main():
 
     sub.add_parser("reference", help="teams, players, franchise history, all-time leaders")
 
+    ex = sub.add_parser("export", help="write a slim, read-only copy of the database for serving")
+    ex.add_argument("--out", help="output path (default data/nba_serve.db)")
+
     mo = sub.add_parser("models", help="rebuild Elo, SRS, RAPM, impact, WAR (no fetching "
                                        "except lineups missing from the cache)")
     mo.add_argument("--lineups", action="store_true", help="(re)load lineups for all stored seasons")
@@ -47,6 +51,10 @@ def main():
 
     if a.cmd == "update":
         seasons = a.seasons or (season_range(a.first, a.last) if a.first else [a.last])
+        if any(season_in_progress(s) for s in seasons) and not a.refresh:
+            # a season still being played changes daily, so cached responses are stale
+            print("Season in progress: fetching fresh data instead of using the cache")
+            nbacom.REFRESH = bref.REFRESH = True
         build.run(seasons, use_bref=not a.no_bref, use_onoff=not a.no_onoff,
                   playoffs=not a.no_playoffs)
     elif a.cmd == "history":
@@ -62,6 +70,9 @@ def main():
     elif a.cmd == "predict":
         from . import predict
         predict.run(a.season, a.sims)
+    elif a.cmd == "export":
+        from . import export
+        export.run(a.out)
     elif a.cmd == "reference":
         con = db.connect()
         build.update_reference(con)

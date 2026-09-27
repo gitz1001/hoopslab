@@ -1,0 +1,21 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Byte-compile
+        run: python -m compileall -q nbastats app tests
+      - name: Check front-end JavaScript
+        run: node --check app/static/app.js
+      - name: Tests (API tests skip without a database)
+        run: python -m unittest discover -s tests -v
+      - name: Docker image builds (without data)
+        run: |
+          mkdir -p data && touch data/nba_serve.db
+          docker build -t hoopslab:ci .

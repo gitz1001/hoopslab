@@ -190,3 +190,5 @@ td.rank { color: var(--muted); width: 1%; }
   .search .results { width: min(300px, calc(100vw - 32px)); }
   h1 { font-size: 22px; }
 }
+
+footer.foot { max-width: 1320px; margin: 0 auto; padding: 0 16px 32px; color: var(--muted); font-size: 12px; }

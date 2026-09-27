@@ -1,0 +1,13 @@
+# Render Blueprint (https://render.com/docs/blueprint-spec). Push the repo including
+# data/nba_serve.db via Git LFS, or switch to a prebuilt image from a registry.
+services:
+  - type: web
+    name: hoopslab
+    runtime: docker
+    plan: starter
+    healthCheckPath: /healthz
+    envVars:
+      - key: WEB_WORKERS
+        value: "2"
+      - key: NBA_API_CACHE_SECONDS
+        value: "600"

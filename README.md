@@ -4,6 +4,12 @@ A local NBA stats system: a data pipeline that pulls free public data into SQLit
 website/dashboard on top of it for browsing players, teams, standings, leaderboards and
 records, plus an analysis section that goes from simple comparisons to models.
 
+## Deploying
+
+See [DEPLOY.md](DEPLOY.md): build the data locally, `python -m nbastats export`, then
+`docker compose up -d --build` (or Fly.io / Render / waitress on Windows). Refresh with
+`scripts/refresh.ps1` or `scripts/refresh.sh`. Tests: `python -m unittest discover -s tests`.
+
 ## Quick start
 
 Needs Python 3.10+.

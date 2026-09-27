@@ -1,0 +1,15 @@
+# Local or VPS deployment:  docker compose up -d --build   ->  http://localhost:8050
+services:
+  web:
+    build: .
+    image: hoopslab:latest
+    ports:
+      - "${PORT:-8050}:8050"
+    environment:
+      PORT: 8050
+      WEB_WORKERS: ${WEB_WORKERS:-2}
+      NBA_API_CACHE_SECONDS: ${NBA_API_CACHE_SECONDS:-600}
+    # To refresh data without rebuilding, mount the exported database instead of baking it:
+    # volumes:
+    #   - ./data/nba_serve.db:/data/nba_serve.db:ro
+    restart: unless-stopped

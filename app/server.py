@@ -1,6 +1,9 @@
 """Flask JSON API + static single-page site.  Run: python -m app  (http://127.0.0.1:8050)"""
+import gzip
 import json
+import logging
 import math
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -15,6 +18,45 @@ from .catalog import LEAGUE_STATS, PLAYER_STATS, TEAM_STATS, as_json
 
 STATIC = Path(__file__).parent / "static"
 app = Flask(__name__, static_folder=None)
+app.json.sort_keys = False
+
+API_CACHE_SECONDS = int(os.environ.get("NBA_API_CACHE_SECONDS", "600"))
+CSP = ("default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; "
+       "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'")
+
+
+@app.after_request
+def production_headers(resp):
+    """Compression, caching and basic security headers (no extra dependencies)."""
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    resp.headers.setdefault("Content-Security-Policy", CSP)
+    if request.path.startswith("/api/") and resp.status_code == 200:
+        resp.headers["Cache-Control"] = f"public, max-age={API_CACHE_SECONDS}"
+    elif request.path.endswith((".js", ".css")):
+        resp.headers["Cache-Control"] = "public, max-age=3600"
+    if (resp.status_code == 200 and not resp.direct_passthrough
+            and "gzip" in request.headers.get("Accept-Encoding", "")
+            and resp.mimetype in ("application/json", "text/html", "text/css", "application/javascript", "text/javascript")
+            and "Content-Encoding" not in resp.headers):
+        data = resp.get_data()
+        if len(data) > 1024:
+            resp.set_data(gzip.compress(data, compresslevel=5))
+            resp.headers["Content-Encoding"] = "gzip"
+            resp.headers["Vary"] = "Accept-Encoding"
+            resp.headers["Content-Length"] = str(len(resp.get_data()))
+    return resp
+
+
+@app.get("/healthz")
+def healthz():
+    """Liveness/readiness probe: the database opens and has data."""
+    try:
+        n = q("SELECT count(*) n FROM player_season_full")["n"].iloc[0]
+        return jsonify({"status": "ok", "player_seasons": int(n)})
+    except Exception as e:  # noqa: BLE001 - report any failure to the probe
+        return jsonify({"status": "error", "error": str(e)}), 503
 
 
 def q(sql, params=()):
@@ -254,10 +296,12 @@ def _records(season, season_type):
         filt += " AND season = ?"
         params.append(season)
     single = {}
+    # the served database carries a precomputed top-25-per-season table instead of big indexes
+    src = "player_game_top" if _has("player_game_top") else "player_game"
     for stat, label in GAME_RECORD_STATS.items():
         single[stat] = q(f"""SELECT player_id, player_name, team_abbreviation, game_date,
                                     matchup, wl, {stat} v, pts, reb, ast
-                             FROM player_game WHERE {filt} AND {stat} IS NOT NULL
+                             FROM {src} WHERE {filt} AND {stat} IS NOT NULL
                              ORDER BY {stat} DESC LIMIT 10""", params)
     triple = q(f"""SELECT player_id, player_name, count(*) n FROM player_game WHERE {filt}
                    AND triple_double = 1
@@ -662,5 +706,22 @@ def static_files(path):
 
 
 @app.errorhandler(ValueError)
+@app.errorhandler(KeyError)
 def bad_request(e):
-    return jsonify({"error": str(e)}), 400
+    return jsonify({"error": f"bad request: {e}"}), 400
+
+
+@app.errorhandler(404)
+def not_found(e):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "not found"}), 404
+    return send_from_directory(STATIC, "index.html")
+
+
+@app.errorhandler(Exception)
+def server_error(e):
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        return e
+    logging.getLogger("hoopslab").exception("unhandled error on %s", request.path)
+    return jsonify({"error": "internal error"}), 500

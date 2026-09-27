@@ -4,10 +4,17 @@ import sqlite3
 
 import pandas as pd
 
-from .config import DB_PATH, DATA_DIR
+from .config import DATA_DIR, DB_PATH, READONLY
 
 
-def connect(path=DB_PATH) -> sqlite3.Connection:
+def connect(path=None, readonly: bool | None = None) -> sqlite3.Connection:
+    path = path or DB_PATH
+    readonly = READONLY if readonly is None else readonly
+    if readonly:
+        # immutable: SQLite skips locking entirely; the file must not change while served
+        con = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True, check_same_thread=False)
+        con.row_factory = sqlite3.Row
+        return con
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
@@ -71,8 +78,10 @@ INDEXES = [
     ("team_game", f"season_type, {c}") for c in ("pts", "plus_minus", "fg3m")]
 
 
-def ensure_indexes(con):
+def ensure_indexes(con, skip=()):
     for table, cols in INDEXES:
+        if (table, cols) in skip:
+            continue
         if table_exists(con, table):
             name = f"ix_{table}_{cols.replace(', ', '_')}"
             con.execute(f'CREATE INDEX IF NOT EXISTS "{name}" ON "{table}" ({cols})')

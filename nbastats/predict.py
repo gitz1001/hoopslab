@@ -22,12 +22,13 @@ import pandas as pd
 from scipy.optimize import minimize
 
 from . import db
-from .config import season_label, season_start
+from .config import current_season, season_in_progress, season_label, season_start
 from .sources import nbacom
 
 RS = "Regular Season"
 TEAM_MIN = 48 * 5 * 82
 GAME_SD = 12.5  # SD of NBA game margins around the expected spread
+IN_SEASON_K = 25  # games of preseason projection blended with results so far
 IMPACT_PRIOR, IMPACT_REG = -1.5, 2500.0  # prior for thin samples, possessions of prior
 RATE_REG = 800.0  # minutes of league-average play mixed into rate stats
 RATES = ["pts", "reb", "ast", "stl", "blk", "tov", "fg3m", "oreb", "dreb"]
@@ -227,6 +228,8 @@ def backtest(con, ps, aging, priors, draft, first=2000):
     rows, players = [], []
     last = int(ps.season.max()[:4])
     for y in range(first, last + 1):
+        if season_in_progress(season_label(y)):
+            continue  # an unfinished season has no final result to test against
         tgt = season_label(y)
         roster = ps[ps.season == tgt][["team_id", "player_id", "player_name", "age"]].rename(
             columns={"player_name": "name"})
@@ -267,7 +270,9 @@ def _series_win_prob(p_high_home, p_high_road):
 
 
 def simulate(teams: pd.DataFrame, sched: pd.DataFrame, cal: dict, hca: float, sims: int,
-             seed: int = 7):
+             seed: int = 7, base_wins=None, base_games=None):
+    """sched holds the games still to play; base_wins/base_games are results so far
+    (in-season mode), otherwise every team starts 0-0."""
     rng = np.random.default_rng(seed)
     ids = teams["team_id"].to_numpy()
     idx = {t: i for i, t in enumerate(ids)}
@@ -279,7 +284,7 @@ def simulate(teams: pd.DataFrame, sched: pd.DataFrame, cal: dict, hca: float, si
     h = s.home_id.map(idx).to_numpy()
     a = s.away_id.map(idx).to_numpy()
     edge = np.where(s.neutral.to_numpy() == 1, 0.0, hca)
-    wins = np.zeros((sims, n))
+    wins = np.zeros((sims, n)) + (0 if base_wins is None else np.asarray(base_wins, float)[None, :])
     chunk = 1000
     for c0 in range(0, sims, chunk):
         tr = true[c0:c0 + chunk]
@@ -288,8 +293,9 @@ def simulate(teams: pd.DataFrame, sched: pd.DataFrame, cal: dict, hca: float, si
         hw = rng.random(p.shape) < p
         wins[c0:c0 + chunk] += hw @ _onehot(h, n) + (~hw) @ _onehot(a, n)
     # games not yet scheduled (NBA Cup knockout slots): play vs an average team, neutral site
-    played = np.bincount(h, minlength=n) + np.bincount(a, minlength=n)
-    extra = np.clip(82 - played, 0, None)
+    scheduled = np.bincount(h, minlength=n) + np.bincount(a, minlength=n)
+    done = np.zeros(n) if base_games is None else np.asarray(base_games, float)
+    extra = np.clip(82 - scheduled - done, 0, None).astype(int)
     wins += rng.binomial(extra[None, :].repeat(sims, 0), _phi(true / GAME_SD))
     tieb = rng.random((sims, n)) * 0.01
 
@@ -452,9 +458,14 @@ def run(target: str | None = None, sims: int = 10000):
     con = db.connect()
     ps = db.read_sql(con, "SELECT * FROM player_season_full")
     ps["min_pg"] = ps["min"] / ps["gp"]
+    cur = current_season()
+    if target is None:
+        live = season_in_progress(cur) and cur in set(ps.season)
+        target = cur if live else season_label(season_start(ps.season.max()) + 1)
+    in_season = target in set(ps.season)
+    ps = ps[ps.season < target].copy()  # projections only ever see earlier seasons
     last = ps.season.max()
-    target = target or season_label(season_start(last) + 1)
-    log(f"target season {target} (history through {last})")
+    log(f"target season {target} (history through {last}{', in-season mode' if in_season else ''})")
 
     teams_ref = nbacom.teams()
     roster = pd.concat([nbacom.roster(target, t) for t in teams_ref.team_id], ignore_index=True)
@@ -495,8 +506,24 @@ def run(target: str | None = None, sims: int = 10000):
     hca = float(db.read_sql(con, "SELECT avg(hca) h FROM team_srs WHERE season >= ?",
                             (season_label(season_start(last) - 2),))["h"].iloc[0])
 
+    base_wins = base_games = None
+    to_play = sched
+    if in_season:
+        # blend the preseason projection with results so far (weight grows with games played)
+        now = db.read_sql(con, """SELECT team_id, gp, w, net_rating FROM team_season_full
+                                  WHERE season = ?""", (target,))
+        ts = ts.merge(now.rename(columns={"gp": "cur_gp", "w": "cur_w", "net_rating": "cur_net"}),
+                      on="team_id", how="left").fillna({"cur_gp": 0, "cur_w": 0, "cur_net": 0})
+        ts["pre_net"] = ts["pred_net"]
+        ts["pred_net"] = (ts["pre_net"] * IN_SEASON_K + ts["cur_net"] * ts["cur_gp"]) / (IN_SEASON_K + ts["cur_gp"])
+        played = set(db.read_sql(con, "SELECT DISTINCT game_id FROM team_game WHERE season=? AND season_type=?",
+                                 (target, RS))["game_id"])
+        to_play = sched[~sched.game_id.isin(played)]
+        base_wins, base_games = ts["cur_w"].to_numpy(), ts["cur_gp"].to_numpy()
+        log(f"{len(played)} games played, {len(to_play)} left to simulate")
+
     log(f"simulating {sims:,} seasons")
-    sim = simulate(ts, sched, cal, hca, sims)
+    sim = simulate(ts, to_play, cal, hca, sims, base_wins=base_wins, base_games=base_games)
     ts = ts.merge(sim, on="team_id")
     ts["season"] = target
 
@@ -542,7 +569,9 @@ def run(target: str | None = None, sims: int = 10000):
     meta = pd.DataFrame([{"season": target, "history_through": last, "sims": sims,
                           "created": time.strftime("%Y-%m-%d %H:%M"), "hca": hca,
                           "calibration": json.dumps(cal), "wins_per_net": wins_per_net,
-                          "awards": json.dumps(award_meta), "games": len(sched)}])
+                          "awards": json.dumps(award_meta), "games": len(sched),
+                          "mode": "in-season" if in_season else "preseason",
+                          "games_left": len(to_play)}])
     db.replace_rows(con, "pred_meta", meta, {"season": target})
     log("done")
     con.close()
