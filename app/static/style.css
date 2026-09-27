@@ -182,3 +182,11 @@ td.rank { color: var(--muted); width: 1%; }
 .loading { color: var(--muted); padding: 40px; text-align: center; }
 .hero { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px;
   flex-wrap: wrap; margin-bottom: 18px; }
+
+@media (max-width: 520px) {
+  .top-tools { width: 100%; }
+  .search { flex: 1; min-width: 0; }
+  .search input { width: 100%; }
+  .search .results { width: min(300px, calc(100vw - 32px)); }
+  h1 { font-size: 22px; }
+}

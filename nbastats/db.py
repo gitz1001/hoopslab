@@ -62,7 +62,13 @@ INDEXES = [
     ("player_season_full", "season"),
     ("team_season_full", "season"),
     ("player_onoff", "season, team_id"),
-]
+    ("bref_history", "bref_id"),
+    ("bref_history", "bref_name"),
+    ("draft_history", "person_id"),
+    ("player_game", "triple_double, season_type"),
+] + [("player_game", f"season_type, {c}") for c in
+     ("pts", "reb", "ast", "stl", "blk", "fg3m", "ftm", "game_score", "plus_minus")] + [
+    ("team_game", f"season_type, {c}") for c in ("pts", "plus_minus", "fg3m")]
 
 
 def ensure_indexes(con):

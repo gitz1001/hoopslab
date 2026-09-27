@@ -259,7 +259,7 @@ def _records(season, season_type):
                              FROM player_game WHERE {filt} AND {stat} IS NOT NULL
                              ORDER BY {stat} DESC LIMIT 10""", params)
     triple = q(f"""SELECT player_id, player_name, count(*) n FROM player_game WHERE {filt}
-                   AND ((pts>=10)+(reb>=10)+(ast>=10)+(stl>=10)+(blk>=10)) >= 3
+                   AND triple_double = 1
                    GROUP BY player_id ORDER BY n DESC LIMIT 15""", params)
     team_games = {
         "Most points": q(f"""SELECT team_abbreviation, game_date, matchup, wl, pts v

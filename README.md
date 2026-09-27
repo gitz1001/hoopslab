@@ -29,7 +29,7 @@ python -m nbastats update --seasons 2026-27     # a new season once it's played 
 
 | Source | How | What it gives |
 | --- | --- | --- |
-| NBA.com stats | [`nba_api`](https://github.com/swar/nba_api), 0.7 s between calls | player and team totals, NBA.com advanced (ratings, USG%, AST%, rebound %, PIE, pace), four factors, opponent stats, standings, every player and team box score (regular season + playoffs), on/off court splits for every team, all-time career leaders, franchise history, player index |
+| NBA.com stats | [`nba_api`](https://github.com/swar/nba_api), 0.7 s between calls | player and team totals, NBA.com advanced (ratings, USG%, AST%, rebound %, PIE, pace), four factors, opponent stats, standings, every player and team box score (regular season + playoffs), on/off court splits (2007-08 on), shot zones, clutch stats, hustle stats (2015-16 on), height/weight/college/country, draft history, all-time career leaders, franchise history, player index |
 | Basketball Reference | scraped, one page per 4 s (their limit is 20/min) | PER, Win Shares, BPM/OBPM/DBPM, VORP, STL%/BLK%, positions, awards; pre-1996 season totals |
 
 Raw responses are cached in `data/raw/` (JSON for NBA.com, HTML for Basketball Reference),
@@ -46,6 +46,7 @@ falling back to last name + first initial.
 | `league_season` | league averages per season (pace, ORtg, TS%, 3PA rate, …) |
 | `player_game`, `team_game` | every box score line, with Game Score |
 | `player_onoff` | on-court vs off-court team ratings per player-team-season |
+| `player_bio`, `player_shot_zones`, `player_clutch`, `player_hustle`, `draft_history` | raw extra sources, also merged into `player_season_full` |
 | `player_season_base`, `player_season_adv`, `player_season_playoffs`, `team_season_base`, `team_season_adv`, `standings`, `bref_advanced` | raw source tables |
 | `bref_history` | pre-1996 Basketball Reference totals + advanced |
 | `players`, `teams`, `franchise_history`, `alltime_leaders` | reference data |
@@ -58,23 +59,31 @@ falling back to last name + first initial.
 - **Game Score** for every box score line.
 - **Pythagorean wins** (exponent 13.91) and luck = actual − expected wins.
 
+## What's loaded
+
+After the full load: 30 NBA.com seasons (1996-97 to 2025-26) with about 787,000 player box
+score lines, plus 17 Basketball Reference seasons (1979-80 to 1995-96). 99.6% of Basketball
+Reference player-seasons match an NBA.com player. The database is about 430 MB.
+
 ## Website
 
 - **Dashboard**: league KPIs vs last season, leaders, team ORtg/DRtg map, net rating ranking.
-- **Players**: sortable, filterable table with Basic / Shooting / Advanced / Per 36 / Per 100 / Impact / Totals views.
-- **Player page**: game log chart with rolling average, percentile profile, career arc of any stat, most similar player-seasons, season-by-season, playoffs, pre-1996 history, full game log.
+- **Players**: sortable, filterable table with Basic / Shooting / Advanced / Per 36 / Per 100 / Impact / Totals / Shot zones / Clutch / Hustle views.
+- **Player page**: bio and draft info, shot profile by zone, clutch and hustle numbers, game log chart with rolling average, percentile profile, career arc of any stat, most similar player-seasons, season-by-season, playoffs, pre-1996 history, full game log.
 - **Teams, team page**: ratings, four factors, season flow, franchise rating history, roster, on/off.
 - **Standings** with Pythagorean wins and luck.
 - **Leaders**: any stat, one season or all seasons.
 - **Records**: single-game highs, triple-doubles, best teams, team game records, all-time career leaders.
-- **Trends**: how pace, 3-point volume, efficiency and more changed over the years.
+- **Trends**: where shots come from (rim, paint, mid-range, corner 3, above-the-break 3) and how pace, 3-point volume, efficiency and more changed since 1979-80.
 - **Analysis**
   - *Compare*: up to four player-seasons, radar of percentiles plus a stat table.
   - *Stat explorer*: any stat vs any stat for players or teams, with correlation.
   - *Archetypes*: k-means clustering on eleven style features, PCA map, auto-named clusters.
   - *Projections*: Marcel-style next-season forecasts (5/4/3 weights, regression to the mean, age adjustment).
   - *Aging curves*: delta-method curves for any rate stat.
-  - *What wins*: four-factor regression on win% and a Pythagorean luck chart.
+  - *What wins*: four-factor regression on win% (R² 0.93 over 892 team-seasons) and a Pythagorean luck chart.
+  - *Draft value*: average career win shares by pick, biggest steals, every draft class.
+  - *Origins*: international share of minutes, height over time, countries and colleges.
 
 ## Layout
 

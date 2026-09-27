@@ -864,7 +864,7 @@ async function aDraft(nav, params) {
   document.getElementById("dn").textContent = `Drafts through ${d.mature_through}. Hover a bar for the best player taken at that pick.`;
   table(document.getElementById("dst"), d.steals, [
     { key: "player_name", label: "Player", cls: "l", render: r => playerLink(r.player_id, r.player_name) },
-    { key: "draft_year", label: "Year", fmt: "i" }, { key: "overall_pick", label: "Pick", fmt: "i" },
+    { key: "draft_year", label: "Year", render: r => r.draft_year }, { key: "overall_pick", label: "Pick", fmt: "i" },
     { key: "team_abbreviation", label: "By", cls: "l" }, { key: "ws", label: "WS", fmt: "1" }], { sort: "ws", short: true });
   const years = [...new Set(d.draft.map(r => r.draft_year))].sort((a, b) => b - a);
   const sel = document.getElementById("dy");

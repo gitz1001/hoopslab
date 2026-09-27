@@ -54,13 +54,18 @@ def update_season(con, season: str, use_bref=True, use_onoff=True, playoffs=True
         tg = pd.concat([tg, _lower(nbacom.game_logs(season, "T", PO))], ignore_index=True)
         base_po = _lower(nbacom.player_season(season, "Base", PO))
     pg["game_score"] = metrics.game_score(pg).round(1)
+    pg["triple_double"] = ((pg[["pts", "reb", "ast", "stl", "blk"]] >= 10).sum(axis=1) >= 3).astype(int)
     tg["game_score"] = None
 
     onoff = pd.DataFrame()
     if use_onoff:
         log(f"{season}: on/off for {len(t_base)} teams")
         frames = [nbacom.onoff(season, int(tid)) for tid in t_base["team_id"]]
-        onoff = _lower(pd.concat([f for f in frames if not f.empty], ignore_index=True))
+        frames = [f for f in frames if not f.empty]
+        if frames:
+            onoff = _lower(pd.concat(frames, ignore_index=True))
+        else:
+            log(f"  NBA.com has no on/off data for {season}")
 
     b_adv = pd.DataFrame()
     if use_bref:
@@ -115,6 +120,7 @@ def update_history(con, seasons: list[str]):
         keep = [c for c in adv.columns if c not in tot.columns or c == "bref_id"]
         df = tot.merge(adv[keep], on="bref_id", how="left")
         db.replace_rows(con, "bref_history", df, {"season": s})
+    db.ensure_indexes(con)
 
 
 def run(seasons, use_bref=True, use_onoff=True, playoffs=True, reference=True):

@@ -1,11 +1,14 @@
 """Analysis models that run on top of the SQLite tables: archetype clustering, similarity,
 Marcel-style projections, aging curves, percentiles and team win models."""
 import os
+import warnings
 from functools import lru_cache
 
 import numpy as np
 import pandas as pd
 os.environ.setdefault("LOKY_MAX_CPU_COUNT", str(os.cpu_count() or 4))
+# joblib cannot count physical cores on some Windows setups and warns on every fit
+warnings.filterwarnings("ignore", message="Could not find the number of physical cores")
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LinearRegression
