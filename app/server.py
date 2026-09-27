@@ -439,6 +439,163 @@ def a_origins():
     return ok({"trend": trend, "countries": countries, "colleges": colleges})
 
 
+# ------------------------------------------------------------------ advanced models
+
+@app.get("/api/analysis/impact")
+def a_impact():
+    season = arg_season()
+    min_min = int(request.args.get("min_min", 500))
+    cols = [c for c in ["player_id", "player_name", "team_id", "team_abbreviation", "age", "pos",
+                        "gp", "min", "poss", "impact", "o_impact", "d_impact", "war",
+                        "box_impact", "o_box", "d_box", "rapm", "rapm_o", "rapm_d", "rapm_poss",
+                        "bpm", "net_diff"] if c in player_cols() + ["poss", "rapm_poss"]]
+    df = q(f"SELECT {', '.join(cols)} FROM player_season_full WHERE season=? AND min>=?",
+           (season, min_min))
+    coefs = q("SELECT * FROM box_model_coefs") if _has("box_model_coefs") else pd.DataFrame()
+    has_rapm = bool(df["rapm"].notna().any()) if "rapm" in df else False
+    corr = {}
+    for k in ("bpm", "per", "ws_per_48", "net_diff", "pie"):
+        t = q(f"SELECT impact, {k} v FROM player_season_full WHERE min >= 1000")
+        corr[k] = float(t["impact"].corr(t["v"])) if len(t) > 10 else None
+    return ok({"season": season, "rows": df, "coefs": coefs, "has_rapm": has_rapm, "corr": corr})
+
+
+def _has(table):
+    con = db.connect()
+    try:
+        return db.table_exists(con, table)
+    finally:
+        con.close()
+
+
+@app.get("/api/analysis/power")
+def a_power():
+    season = arg_season()
+    teams = q("""SELECT team_id, team_abbr, team_name, conference, w, l, net_rating, srs, mov, sos,
+                        elo_end, elo_peak, pyth_w FROM team_season_full WHERE season=?""", (season,))
+    games = q("""SELECT game_date, home_id, home, away_id, away, home_pts, away_pts,
+                        home_elo_post, away_elo_post, home_win_prob, season_type
+                 FROM game_elo WHERE season=? ORDER BY game_date""", (season,))
+    best = q("""SELECT season, team_abbr, w, l, elo_peak, elo_end, srs FROM team_season_full
+                WHERE elo_peak IS NOT NULL ORDER BY elo_peak DESC LIMIT 12""")
+    cal = q("""SELECT home_win_prob p, home_pts > away_pts won FROM game_elo
+               WHERE season_type='Regular Season'""")
+    cal["bucket"] = (cal["p"] * 10).clip(0, 9.999).astype(int)
+    calib = cal.groupby("bucket").agg(pred=("p", "mean"), actual=("won", "mean"), n=("won", "size")).reset_index()
+    stats = {"accuracy": float(((cal.p > 0.5) == cal.won.astype(bool)).mean()),
+             "brier": float(((cal.p - cal.won) ** 2).mean()), "games": int(len(cal))}
+    return ok({"season": season, "teams": teams, "games": games, "best": best,
+               "calibration": calib, "stats": stats})
+
+
+def _series_prob(p_home, p_road):
+    """Best-of-7 with 2-2-1-1-1 home court: exact probability the higher seed wins."""
+    home_games = [1, 1, 0, 0, 1, 0, 1]
+    probs = {(0, 0): 1.0}
+    win = 0.0
+    for g in range(7):
+        nxt = {}
+        for (w, l), pr in probs.items():
+            p = p_home if home_games[g] else p_road
+            for dw, dl, pp in ((1, 0, p), (0, 1, 1 - p)):
+                k = (w + dw, l + dl)
+                if k[0] == 4:
+                    win += pr * pp
+                elif k[1] < 4:
+                    nxt[k] = nxt.get(k, 0) + pr * pp
+        probs = nxt
+    return win
+
+
+@app.get("/api/analysis/predict")
+def a_predict():
+    from statistics import NormalDist
+    season = arg_season()
+    home, away = int(request.args["home"]), int(request.args["away"])
+    t = q("""SELECT team_id, team_abbr, team_name, elo_end, srs, net_rating, w, l
+             FROM team_season_full WHERE season=? AND team_id IN (?, ?)""", (season, home, away))
+    if len(t) < 2:
+        return ok({"error": "both teams need a stored season"})
+    t = t.set_index("team_id")
+    hca = q("SELECT avg(hca) h FROM team_srs WHERE season=?", (season,))["h"].iloc[0] or 2.5
+    elo_diff = t.loc[home, "elo_end"] - t.loc[away, "elo_end"]
+    p_elo_home = 1 / (1 + 10 ** (-(elo_diff + 100) / 400))
+    p_elo_road = 1 / (1 + 10 ** (-(elo_diff - 100) / 400))
+    spread = t.loc[home, "srs"] - t.loc[away, "srs"] + hca
+    nd = NormalDist(0, 12.5)  # NBA game margins vary around the spread with SD ~12.5
+    p_srs_home = nd.cdf(spread)
+    p_srs_road = nd.cdf(spread - 2 * hca)
+    return ok({
+        "home": t.loc[home].to_dict(), "away": t.loc[away].to_dict(), "hca": hca,
+        "elo": {"p_home": p_elo_home, "series": _series_prob(p_elo_home, p_elo_road)},
+        "srs": {"spread": spread, "p_home": p_srs_home, "series": _series_prob(p_srs_home, p_srs_road)},
+    })
+
+
+@app.get("/api/analysis/situational")
+def a_situational():
+    home = q("""SELECT season, avg(home_pts > away_pts) home_wpct, avg(home_pts - away_pts) home_margin
+                FROM game_elo WHERE season_type='Regular Season' GROUP BY season ORDER BY season""")
+    rest = q("""SELECT CASE WHEN rest >= 3 THEN 3 ELSE rest END r, count(*) n,
+                       avg(wl='W') wpct, avg(plus_minus) margin
+                FROM team_rest WHERE rest IS NOT NULL GROUP BY r ORDER BY r""")
+    matchup = q("""SELECT CASE WHEN rest >= 2 THEN 2 ELSE rest END r,
+                          CASE WHEN opp_rest >= 2 THEN 2 ELSE opp_rest END o, count(*) n,
+                          avg(wl='W') wpct, avg(plus_minus) margin
+                   FROM team_rest WHERE rest IS NOT NULL AND opp_rest IS NOT NULL
+                   GROUP BY r, o""")
+    b2b = q("""SELECT season, avg(rest = 0) b2b_share FROM team_rest WHERE rest IS NOT NULL
+               GROUP BY season ORDER BY season""")
+    return ok({"home": home, "rest": rest, "matchup": matchup, "b2b": b2b})
+
+
+STICKY = ["pts_p100", "ast_pct", "reb_pct", "oreb_pct", "dreb_pct", "stl_p100", "blk_p100",
+          "tov_p100", "usg_pct", "ts_pct", "efg_pct", "fg3_pct", "ft_pct", "fg2_pct", "fg3a_rate",
+          "fta_rate", "mid_fg_pct", "ra_fg_pct", "c3_fg_pct", "per", "bpm", "ws_per_48",
+          "net_diff", "on_net_rating", "impact", "box_impact", "rapm", "shot_making",
+          "clutch_ts_pct", "clutch_pts_p36", "off_rating", "def_rating", "deflections_p36"]
+
+
+@lru_cache(maxsize=4)
+def _stickiness(min_min):
+    have = set(player_cols()) | {"poss"}
+    cols = [c for c in STICKY if c in have]
+    df = q(f"SELECT player_id, season, min, {', '.join(cols)} FROM player_season_full WHERE min >= ?",
+           (min_min,))
+    df["start"] = df.season.str[:4].astype(int)
+    nxt = df.copy()
+    nxt["start"] -= 1
+    pairs = df.merge(nxt, on=["player_id", "start"], suffixes=("", "_next"))
+    out = []
+    for c in cols:
+        p = pairs[[c, f"{c}_next"]].dropna()
+        if len(p) > 50:
+            out.append({"stat": c, "r": float(p[c].corr(p[f"{c}_next"])), "n": int(len(p))})
+    return sorted(out, key=lambda r: -r["r"])
+
+
+@app.get("/api/analysis/stickiness")
+def a_stickiness():
+    return ok({"rows": _stickiness(int(request.args.get("min_min", 1000)))})
+
+
+@app.get("/api/analysis/lineups")
+def a_lineups():
+    season = arg_season()
+    tid = request.args.get("team")
+    min_min = int(request.args.get("min_min", 100))
+    if not _has("lineups"):
+        return ok({"rows": []})
+    where, params = "season=? AND min>=?", [season, min_min]
+    if tid:
+        where += " AND team_id=?"
+        params.append(int(tid))
+    df = q(f"""SELECT group_name, team_id, team_abbreviation, gp, min, poss, off_rating, def_rating,
+                     net_rating, pace, efg_pct, ts_pct FROM lineups WHERE {where}
+              ORDER BY net_rating DESC""", params)
+    return ok({"rows": df})
+
+
 # ------------------------------------------------------------------ static site
 
 @app.get("/")

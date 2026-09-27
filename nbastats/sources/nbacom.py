@@ -10,6 +10,7 @@ from nba_api.stats.endpoints import (
     drafthistory,
     leaguedashplayerbiostats,
     leaguedashplayerclutch,
+    leaguedashlineups,
     leaguedashplayershotlocations,
     leaguehustlestatsplayer,
     franchisehistory,
@@ -230,5 +231,21 @@ def hustle(season: str) -> pd.DataFrame:
     keep = ["PLAYER_ID", "CONTESTED_SHOTS", "CONTESTED_SHOTS_3PT", "DEFLECTIONS", "CHARGES_DRAWN",
             "SCREEN_ASSISTS", "SCREEN_AST_PTS", "LOOSE_BALLS_RECOVERED", "BOX_OUTS"]
     df = df[[c for c in keep if c in df.columns]]
+    df.insert(0, "season", season)
+    return df
+
+
+def lineups(season: str, team_id: int) -> pd.DataFrame:
+    """Every 5-man unit a team used (NBA.com caps league-wide queries at 2,000, so we ask
+    team by team). Lineup data exists from 2007-08 on."""
+    if int(season[:4]) < 2007:
+        return pd.DataFrame()
+    df = fetch(f"lineups_{season}_{team_id}", leaguedashlineups.LeagueDashLineups,
+               season=season, team_id_nullable=team_id, group_quantity=5,
+               measure_type_detailed_defense="Advanced", per_mode_detailed="Totals")[0]
+    keep = ["GROUP_ID", "GROUP_NAME", "TEAM_ID", "TEAM_ABBREVIATION", "GP", "MIN", "OFF_RATING",
+            "DEF_RATING", "NET_RATING", "PACE", "POSS", "EFG_PCT", "TS_PCT", "TM_TOV_PCT",
+            "OREB_PCT", "AST_PCT"]
+    df = df[[c for c in keep if c in df.columns]].copy()
     df.insert(0, "season", season)
     return df

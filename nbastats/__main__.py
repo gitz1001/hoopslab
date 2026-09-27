@@ -4,6 +4,7 @@
     python -m nbastats update --from 2015-16       # a range, through the latest season
     python -m nbastats update --seasons 2023-24 2024-25
     python -m nbastats history --from 1979-80 --to 1995-96   # Basketball Reference only
+    python -m nbastats models --lineups            # Elo, SRS, RAPM, impact, WAR
 """
 import argparse
 
@@ -31,6 +32,10 @@ def main():
 
     sub.add_parser("reference", help="teams, players, franchise history, all-time leaders")
 
+    mo = sub.add_parser("models", help="rebuild Elo, SRS, RAPM, impact, WAR (no fetching "
+                                       "except lineups missing from the cache)")
+    mo.add_argument("--lineups", action="store_true", help="(re)load lineups for all stored seasons")
+
     a = ap.parse_args()
     if getattr(a, "refresh", False):
         nbacom.REFRESH = bref.REFRESH = True
@@ -42,6 +47,13 @@ def main():
     elif a.cmd == "history":
         con = db.connect()
         build.update_history(con, season_range(a.first, a.last))
+    elif a.cmd == "models":
+        from . import models
+        con = db.connect()
+        seasons = None
+        if a.lineups:
+            seasons = db.read_sql(con, "SELECT DISTINCT season FROM player_season_full")["season"].tolist()
+        models.run(con, seasons)
     elif a.cmd == "reference":
         con = db.connect()
         build.update_reference(con)

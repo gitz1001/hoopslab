@@ -65,6 +65,24 @@ After the full load: 30 NBA.com seasons (1996-97 to 2025-26) with about 787,000 
 score lines, plus 17 Basketball Reference seasons (1979-80 to 1995-96). 99.6% of Basketball
 Reference player-seasons match an NBA.com player. The database is about 430 MB.
 
+## Advanced models (`python -m nbastats models`)
+
+Runs automatically at the end of every `update`; rerun it alone any time (no network needed
+except lineups missing from the cache; add `--lineups` to (re)load lineups for all seasons).
+
+| Model | What it does |
+| --- | --- |
+| **Elo** | Every game since 1996-97: K = 20, 100-point home edge, margin-of-victory multiplier, 25% regression to 1505 between seasons. Calls about two thirds of regular-season games correctly. |
+| **SRS** | Least-squares team ratings from game margins with a home-court term, giving margin adjusted for strength of schedule. |
+| **Rest and home court** | Days of rest before each game, back-to-back effects, rest-vs-rest matchups, home win % over time. |
+| **RAPM** | Ridge regression of every five-man lineup's offensive and defensive rating (NBA.com lineups, 2007-08 on, possession weighted) on who was on the floor. |
+| **Box impact** | Ridge model that learns which per-100 box-score stats predict RAPM, so seasons without lineup data (1996-2007) still get an estimate. Its coefficients are shown on the Impact page. |
+| **Impact** | RAPM re-fit with the box estimate as its prior (the approach behind modern metrics like EPM), split into offense and defense. |
+| **WAR** | (Impact − replacement level of −2) × possessions ÷ 100 ÷ that season's points per win (fit from team point differential vs wins). |
+| **Shot quality** | Expected eFG% from each player's shot-zone mix at league-average accuracy; shot-making = eFG% − xeFG%; scoring value = points added vs a league-average true shooter on the same attempts. |
+| **Consistency** | Game Score standard deviation, floor (10th percentile), ceiling (90th percentile), mean ÷ SD. |
+| **Signal vs noise** | Season-to-season correlation of 30+ stats, showing which ones reflect stable skill. |
+
 ## Website
 
 - **Dashboard**: league KPIs vs last season, leaders, team ORtg/DRtg map, net rating ranking.
@@ -76,6 +94,13 @@ Reference player-seasons match an NBA.com player. The database is about 430 MB.
 - **Records**: single-game highs, triple-doubles, best teams, team game records, all-time career leaders.
 - **Trends**: where shots come from (rim, paint, mid-range, corner 3, above-the-break 3) and how pace, 3-point volume, efficiency and more changed since 1979-80.
 - **Analysis**
+  - *Impact & WAR*: offense vs defense impact map, what the box model learned, full leaderboard.
+  - *Shot quality*: shot difficulty vs shot-making, usage vs efficiency.
+  - *Signal vs noise*: year-to-year reliability of each stat, most consistent players.
+  - *Power ratings*: Elo through the season, SRS and schedule strength, calibration chart, best teams ever by Elo.
+  - *Game predictor*: win probability, spread and best-of-7 odds for any two teams.
+  - *Lineups*: every five-man unit, minutes vs net rating.
+  - *Rest and home court*: back-to-backs, rest advantage, home-court decline.
   - *Compare*: up to four player-seasons, radar of percentiles plus a stat table.
   - *Stat explorer*: any stat vs any stat for players or teams, with correlation.
   - *Archetypes*: k-means clustering on eleven style features, PCA map, auto-named clusters.

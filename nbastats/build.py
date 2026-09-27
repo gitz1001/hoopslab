@@ -129,7 +129,8 @@ def run(seasons, use_bref=True, use_onoff=True, playoffs=True, reference=True):
         update_reference(con)
     for s in seasons:
         update_season(con, s, use_bref, use_onoff, playoffs)
-    db.ensure_indexes(con)
+    from . import models
+    models.run(con, seasons_for_lineups=seasons)
     con.close()
 
 

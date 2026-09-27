@@ -111,6 +111,27 @@ PLAYER_STATS = {
     "loose_balls_recovered_p36": ("Loose balls/36", "1", "Hustle", True),
     "box_outs_p36": ("Box outs/36", "1", "Hustle", True),
     "charges_drawn": ("Charges drawn", "i", "Hustle", True),
+    # Impact models (ours): lineup RAPM, box model, prior-informed RAPM, wins above replacement
+    "impact": ("Impact", "1", "Impact models", True),
+    "o_impact": ("O-Impact", "1", "Impact models", True),
+    "d_impact": ("D-Impact", "1", "Impact models", True),
+    "war": ("WAR", "1", "Impact models", True),
+    "box_impact": ("Box Impact", "1", "Impact models", True),
+    "o_box": ("O-Box", "1", "Impact models", True),
+    "d_box": ("D-Box", "1", "Impact models", True),
+    "rapm": ("RAPM (pure)", "1", "Impact models", True),
+    "rapm_o": ("O-RAPM", "1", "Impact models", True),
+    "rapm_d": ("D-RAPM", "1", "Impact models", True),
+    # Shot quality
+    "xefg_pct": ("Expected eFG%", "p", "Shot quality", None),
+    "shot_making": ("Shot-making (eFG - xeFG)", "p", "Shot quality", True),
+    "ts_rel": ("Relative TS%", "p", "Shot quality", True),
+    "scoring_value": ("Scoring value (pts vs avg)", "1", "Shot quality", True),
+    # Consistency
+    "gmsc_sd": ("Game Score SD", "1", "Consistency", None),
+    "gmsc_p10": ("Floor (10th pct GmSc)", "1", "Consistency", True),
+    "gmsc_p90": ("Ceiling (90th pct GmSc)", "1", "Consistency", True),
+    "consistency": ("Consistency (mean/SD)", "2", "Consistency", True),
     # Bio
     "height_in": ("Height (in)", "i", "Bio", None),
     "weight": ("Weight (lb)", "i", "Bio", None),
@@ -145,6 +166,11 @@ TEAM_STATS = {
     "net_rating": ("Net Rtg", "1", "Ratings", True),
     "pace": ("Pace", "1", "Ratings", None),
     "fg3a_rate": ("3PA rate", "p", "Ratings", None),
+    "srs": ("SRS", "2", "Power", True),
+    "mov": ("Margin", "1", "Power", True),
+    "sos": ("Strength of schedule", "2", "Power", None),
+    "elo_end": ("Elo (end)", "i", "Power", True),
+    "elo_peak": ("Elo (peak)", "i", "Power", True),
 }
 
 LEAGUE_STATS = {
