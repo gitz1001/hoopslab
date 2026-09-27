@@ -1126,6 +1126,198 @@ async function aSituational(nav) {
     <tbody>${[0, 1, 2].map(r => `<tr><td class="l">${lab2(r)}</td>${[0, 1, 2].map(o => { const c = cell(r, o); return `<td title="${c ? c.n.toLocaleString() + " games" : ""}">${c ? (c.wpct * 100).toFixed(1) + "%" : "–"}</td>`; }).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 
+// ------------------------------------------------------------------ predictions
+
+const PRED_TABS = { standings: "Standings forecast", odds: "Playoff & title odds", players: "Player projections",
+  awards: "Awards", movers: "Breakouts & regression", method: "How it works" };
+
+async function vPredict(sub, params) {
+  const pm = await api("predict/meta");
+  if (!pm.available) {
+    setView(`<div class="empty">No predictions yet. Run <code>python -m nbastats predict</code>.</div>`);
+    return;
+  }
+  const season = params.get("season") || pm.seasons[0];
+  const meta = pm.meta.find(m => m.season === season);
+  sub = sub || "standings";
+  const nav = `<div class="toolbar">${Object.entries(PRED_TABS).map(([k, t]) => `<a href="#/predict/${k}"><button class="${k === sub ? "primary" : ""}">${t}</button></a>`).join("")}</div>`;
+  const head = `<div class="hero"><div><h1>${esc(season)} predictions</h1>
+    <p class="sub">Built from data through ${esc(meta.history_through)} and the current NBA.com rosters and schedule · ${meta.sims.toLocaleString()} simulated seasons · updated ${esc(meta.created)}</p></div></div>${nav}`;
+  const fn = { standings: pStandings, odds: pOdds, players: pPlayers, awards: pAwards, movers: pMovers, method: pMethod }[sub];
+  await fn(head, season, meta, params);
+}
+
+function oddsCell(v) {
+  if (v === null || v === undefined) return "–";
+  if (v >= 0.995) return ">99%";
+  if (v > 0 && v < 0.005) return "<1%";
+  return `${Math.round(v * 100)}%`;
+}
+
+async function pStandings(head, season, meta) {
+  setView(`${head}
+    <div class="grid g2"><div class="card flush"><div class="card-head"><h2>East</h2></div><div id="pe"></div></div>
+    <div class="card flush"><div class="card-head"><h2>West</h2></div><div id="pw"></div></div></div>
+    <div class="card section"><div class="card-head"><h2>Projected wins with 80% ranges</h2><span class="muted small">bar = 10th to 90th percentile of simulated wins, dot = average</span></div>
+      <div class="chart-box tall" style="height:680px"><canvas id="c-wr"></canvas></div></div>
+    <div class="card section"><div class="card-head"><h2>Win distribution</h2><select id="wdt"></select></div><div class="chart-box"><canvas id="c-wd"></canvas></div></div>`);
+  const d = await api(`predict/teams?season=${season}`);
+  const cols = [
+    { key: "team_name", label: "Team", cls: "l", render: r => teamLink(r.team_id, r.team_name) },
+    { key: "wins_mean", label: "Proj W", fmt: "1" }, { key: "wins_p10", label: "80% range", render: r => `${Math.round(r.wins_p10)}–${Math.round(r.wins_p90)}` },
+    { key: "pred_net", label: "Net", render: r => signed(r.pred_net) }, { key: "last_w", label: `W ${esc(meta.history_through)}`, fmt: "i" },
+    { key: "p_top6", label: "Top 6", render: r => oddsCell(r.p_top6) }, { key: "p_playoffs", label: "Playoffs", render: r => oddsCell(r.p_playoffs) },
+    { key: "p_title", label: "Title", render: r => oddsCell(r.p_title) }];
+  table(document.getElementById("pe"), d.rows.filter(r => r.conference === "East"), cols, { sort: "wins_mean", rank: true });
+  table(document.getElementById("pw"), d.rows.filter(r => r.conference === "West"), cols, { sort: "wins_mean", rank: true });
+  const rows = d.rows;
+  chart("c-wr", { data: { labels: rows.map(r => r.team_abbr), datasets: [
+    { type: "bar", label: "80% range", data: rows.map(r => [r.wins_p10, r.wins_p90]), backgroundColor: css("--seq-lo"), borderRadius: 4, barPercentage: 0.6, order: 2 },
+    { type: "scatter", label: "Average", data: rows.map((r, i) => ({ x: r.wins_mean, y: r.team_abbr })), backgroundColor: series(0), pointRadius: 5, order: 1 }] },
+    options: baseOptions({ indexAxis: "y", plugins: { ...baseOptions().plugins, tooltip: { ...baseOptions().plugins.tooltip, callbacks: {
+      label: c => { const r = rows[c.dataIndex]; return `${r.team_name}: ${r.wins_mean.toFixed(1)} wins (80%: ${Math.round(r.wins_p10)}–${Math.round(r.wins_p90)}), playoffs ${oddsCell(r.p_playoffs)}`; } } } },
+      scales: { x: { ...baseOptions().scales.x, min: 0, max: 82, title: { display: true, text: "Wins", color: css("--muted") } }, y: { ...baseOptions().scales.y, type: "category", ticks: { color: css("--ink-2"), autoSkip: false } } } }) });
+  const sel = document.getElementById("wdt");
+  sel.innerHTML = rows.map(r => `<option value="${r.team_id}">${esc(r.team_name)}</option>`).join("");
+  const drawHist = () => {
+    const r = rows.find(x => x.team_id == sel.value);
+    const old = S.charts.find(c => c.canvas.id === "c-wd"); if (old) { old.destroy(); S.charts = S.charts.filter(c => c !== old); }
+    const tot = r.wins_hist.reduce((a, b) => a + b, 0);
+    chart("c-wd", { type: "bar", data: { labels: r.wins_hist.map((_, i) => i), datasets: [{ label: "Share of simulations", data: r.wins_hist.map(v => v / tot * 100), backgroundColor: series(0), borderRadius: 2, barPercentage: 1, categoryPercentage: 0.9 }] },
+      options: baseOptions({ plugins: { ...baseOptions().plugins, legend: { display: false }, tooltip: { ...baseOptions().plugins.tooltip, callbacks: { title: it => `${it[0].label} wins`, label: c => `${c.parsed.y.toFixed(1)}% of seasons` } } },
+        scales: { x: { ...baseOptions().scales.x, ticks: { color: css("--muted"), maxTicksLimit: 18 } }, y: { ...baseOptions().scales.y, ticks: { color: css("--muted"), callback: v => v + "%" } } } }) });
+  };
+  sel.onchange = drawHist;
+  drawHist();
+}
+
+async function pOdds(head, season) {
+  setView(`${head}
+    <div class="grid g2"><div class="card"><h3>Championship odds</h3><div class="chart-box tall" style="height:560px"><canvas id="c-title"></canvas></div></div>
+    <div class="card flush"><div class="card-head"><h2>Round by round</h2></div><div id="rbr"></div></div></div>
+    <div class="card section"><div class="card-head"><h2>Seeding probabilities</h2><div class="pills" id="scf"></div></div><div id="seedt"></div>
+      <p class="note">Share of simulations in which each team finished at each seed. Seeds 7-10 go to the play-in.</p></div>`);
+  const d = await api(`predict/teams?season=${season}`);
+  const rows = [...d.rows].sort((a, b) => b.p_title - a.p_title);
+  const top = rows.filter(r => r.p_title >= 0.005);
+  chart("c-title", { type: "bar", data: { labels: top.map(r => r.team_abbr), datasets: [{ label: "Title %", data: top.map(r => r.p_title * 100), backgroundColor: series(0), borderRadius: 4 }] },
+    options: baseOptions({ indexAxis: "y", plugins: { ...baseOptions().plugins, legend: { display: false }, tooltip: { ...baseOptions().plugins.tooltip, callbacks: { label: c => `${c.parsed.x.toFixed(1)}% titles, ${oddsCell(top[c.dataIndex].p_finals)} finals` } } },
+      scales: { x: baseOptions().scales.x, y: { ...baseOptions().scales.y, ticks: { color: css("--ink-2"), autoSkip: false } } } }) });
+  table(document.getElementById("rbr"), rows, [
+    { key: "team_name", label: "Team", cls: "l", render: r => teamLink(r.team_id, r.team_abbr) },
+    ...[["p_playin", "Play-in"], ["p_playoffs", "Playoffs"], ["p_r2", "2nd round"], ["p_cf", "Conf finals"], ["p_finals", "Finals"], ["p_title", "Title"]]
+      .map(([k, l]) => ({ key: k, label: l, render: r => oddsCell(r[k]) }))], { sort: "p_title" });
+  const drawSeeds = cf => {
+    const rs = d.rows.filter(r => r.conference === cf);
+    const el = document.getElementById("seedt");
+    el.innerHTML = `<div class="table-wrap"><table><thead><tr><th class="l">Team</th>${Array.from({ length: 15 }, (_, i) => `<th>${i + 1}</th>`).join("")}</tr></thead><tbody>
+      ${rs.map(r => `<tr><td class="l">${esc(r.team_abbr)}</td>${r.seed_dist.map(v => `<td style="background:${v > 0 ? `color-mix(in srgb, var(--s1) ${Math.round(Math.min(v * 2.5, 1) * 70)}%, transparent)` : "transparent"}">${v >= 0.01 ? Math.round(v * 100) : ""}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  };
+  pills(document.getElementById("scf"), ["East", "West"], "East", drawSeeds);
+  drawSeeds("East");
+}
+
+async function pPlayers(head, season, meta, params) {
+  setView(`${head}
+    <p class="sub">Projected impact, minutes and per-game stats for every rostered player. Reliability shows how much of the projection comes from the player's own track record (rookies start at 0 and lean on how past picks at their draft slot played).</p>
+    <div class="toolbar"><input type="text" id="ppf" placeholder="Filter by name"><label>Team <select id="ppt"><option value="">All</option></select></label>
+      <label><input type="checkbox" id="ppr"> Rookies only</label></div>
+    <div class="card flush" id="ppl"></div>`);
+  const d = await api(`predict/players?season=${season}`);
+  const teams = [...new Set(d.rows.map(r => r.team_abbr).filter(Boolean))].sort();
+  document.getElementById("ppt").innerHTML += teams.map(t => `<option>${t}</option>`).join("");
+  if (params.get("team")) document.getElementById("ppt").value = params.get("team");
+  const draw = () => {
+    const f = document.getElementById("ppf").value.toLowerCase(), t = document.getElementById("ppt").value, rk = document.getElementById("ppr").checked;
+    table(document.getElementById("ppl"), d.rows.filter(r => (!f || r.name.toLowerCase().includes(f)) && (!t || r.team_abbr === t) && (!rk || r.rookie)), [
+      { key: "name", label: "Player", cls: "l", render: r => playerLink(r.player_id, r.name) + (r.rookie ? ` <span class="chip">R #${r.pick ?? "–"}</span>` : "") },
+      { key: "team_abbr", label: "Team", cls: "l" }, { key: "age", label: "Age", fmt: "i" },
+      { key: "impact", label: "Impact", render: r => signed(r.impact) }, { key: "o_impact", label: "O", fmt: "1" }, { key: "d_impact", label: "D", fmt: "1" },
+      { key: "war", label: "WAR", fmt: "1" }, { key: "mpg", label: "MPG", fmt: "1" }, { key: "gp", label: "GP", fmt: "i" },
+      { key: "pts_pg", label: "PTS", fmt: "1" }, { key: "reb_pg", label: "REB", fmt: "1" }, { key: "ast_pg", label: "AST", fmt: "1" },
+      { key: "stl_pg", label: "STL", fmt: "1" }, { key: "blk_pg", label: "BLK", fmt: "1" }, { key: "fg3m_pg", label: "3PM", fmt: "1" }, { key: "ts_pct", label: "TS%", fmt: "p" },
+      { key: "last_pts_pg", label: "PTS last", fmt: "1", title: "Points per game last season" }, { key: "reliability", label: "Reliability", fmt: "2" }],
+      { sort: t ? "mpg" : "war", page: 50, rank: true });
+  };
+  ["ppf", "ppt", "ppr"].forEach(id => document.getElementById(id).oninput = draw);
+  document.getElementById("ppt").onchange = draw;
+  draw();
+}
+
+async function pAwards(head, season, meta) {
+  setView(`${head}
+    <p class="sub">Conditional-logit models of award voting. They were trained on this system's own preseason projections for every past season against how the voting actually went, so the odds reflect genuine preseason uncertainty rather than hindsight.</p>
+    <div class="grid g2" id="aw"></div>`);
+  const d = await api(`predict/awards?season=${season}`);
+  const names = { MVP: "Most Valuable Player", DPOY: "Defensive Player of the Year" };
+  const featLabel = { pts_pg: "Points", ast_pg: "Assists", reb_pg: "Rebounds", war: "WAR", impact: "Impact", team_wpct: "Team win %",
+    d_impact: "Defensive impact", blk_pg: "Blocks", stl_pg: "Steals", dreb_pg: "Def. rebounds", min_pg: "Minutes" };
+  const awards = [...new Set(d.rows.map(r => r.award))];
+  document.getElementById("aw").innerHTML = awards.map(a => {
+    const m = meta.awards[a];
+    return `<div class="card"><h2>${names[a] || a}</h2><div class="chart-box" style="height:360px"><canvas id="c-aw-${a}"></canvas></div>
+      <p class="note">In ${m.seasons} past seasons, the model's preseason favourite won ${Math.round(m.top_pick_accuracy * 100)}% of the time.
+      Weights: ${Object.entries(m.coefficients).map(([k, v]) => `${featLabel[k] || k} ${v > 0 ? "+" : ""}${v.toFixed(2)}`).join(", ")}.</p></div>`;
+  }).join("");
+  awards.forEach(a => {
+    const rows = d.rows.filter(r => r.award === a).slice(0, 10);
+    chart(`c-aw-${a}`, { type: "bar", data: { labels: rows.map(r => `${r.name} (${r.team_abbr})`), datasets: [{ label: "Win probability", data: rows.map(r => r.prob * 100), backgroundColor: series(0), borderRadius: 4 }] },
+      options: baseOptions({ indexAxis: "y", plugins: { ...baseOptions().plugins, legend: { display: false }, tooltip: { ...baseOptions().plugins.tooltip, callbacks: { label: c => `${c.parsed.x.toFixed(1)}%` } } },
+        scales: { x: { ...baseOptions().scales.x, ticks: { color: css("--muted"), callback: v => v + "%" } }, y: { ...baseOptions().scales.y, ticks: { color: css("--ink-2"), autoSkip: false } } } }) });
+  });
+}
+
+async function pMovers(head, season) {
+  setView(`${head}
+    <div class="grid g2">
+      <div class="card flush"><div class="card-head"><h2>Breakout candidates</h2><span class="muted small">25 or younger, projected impact +1 or better</span></div><div id="mv-up"></div></div>
+      <div class="card flush"><div class="card-head"><h2>Decline risks</h2><span class="muted small">impact +2 or better last season, biggest projected drops</span></div><div id="mv-down"></div></div>
+      <div class="card flush"><div class="card-head"><h2>Shooting luck to fade</h2><span class="muted small">10+ ppg scorers whose eFG% far beat their shot locations</span></div><div id="mv-shot"></div></div>
+      <div class="card flush"><div class="card-head"><h2>Teams: biggest projected changes</h2><span class="muted small">projected wins vs last season</span></div><div id="mv-teams"></div></div>
+    </div>
+    <p class="note">Shot-making (eFG% minus the eFG% expected from shot locations) only carries over moderately from year to year; see Analysis → Signal vs noise.</p>`);
+  const [p, t] = await Promise.all([api(`predict/players?season=${season}`), api(`predict/teams?season=${season}`)]);
+  const regular = p.rows.filter(r => r.last_min >= 1000 && r.last_impact !== null);
+  const cols = [{ key: "name", label: "Player", cls: "l", render: r => playerLink(r.player_id, r.name) }, { key: "team_abbr", label: "Team", cls: "l" },
+    { key: "age", label: "Age", fmt: "i" }, { key: "last_impact", label: "Last", fmt: "1" }, { key: "impact", label: "Proj", fmt: "1" },
+    { key: "impact_change", label: "Change", render: r => signed(r.impact_change) }];
+  table(document.getElementById("mv-up"), regular.filter(r => r.age <= 25 && r.impact >= 1).sort((a, b) => b.impact_change - a.impact_change).slice(0, 15), cols, { sort: "impact_change", short: true });
+  table(document.getElementById("mv-down"), regular.filter(r => r.last_impact >= 2).sort((a, b) => a.impact_change - b.impact_change).slice(0, 15), cols, { sort: "impact_change", asc: true, short: true });
+  table(document.getElementById("mv-shot"), p.rows.filter(r => r.last_min >= 1000 && r.last_pts_pg >= 10 && r.last_shot_making !== null).sort((a, b) => b.last_shot_making - a.last_shot_making).slice(0, 15), [
+    { key: "name", label: "Player", cls: "l", render: r => playerLink(r.player_id, r.name) }, { key: "team_abbr", label: "Team", cls: "l" },
+    { key: "last_shot_making", label: "Shot-making last", render: r => signed(r.last_shot_making, "p") }, { key: "last_ts_pct", label: "TS% last", fmt: "p" }, { key: "ts_pct", label: "Proj TS%", fmt: "p" }],
+    { sort: "last_shot_making", short: true });
+  const tr = t.rows.map(r => ({ ...r, change: r.wins_mean - r.last_w }));
+  table(document.getElementById("mv-teams"), tr, [{ key: "team_name", label: "Team", cls: "l", render: r => teamLink(r.team_id, r.team_name) },
+    { key: "last_w", label: "Last W", fmt: "i" }, { key: "wins_mean", label: "Proj W", fmt: "1" }, { key: "change", label: "Change", render: r => signed(r.change) },
+    { key: "last_luck", label: "Luck last", fmt: "1", title: "Wins above Pythagorean expectation last season" }], { sort: "change", short: true });
+}
+
+async function pMethod(head, season, meta) {
+  const cal = meta.calibration;
+  setView(`${head}
+    <div class="grid g2"><div class="card"><h2>How the forecast works</h2>
+      <ol class="small" style="padding-left:18px;line-height:1.6">
+        <li><b>Player projections.</b> Offensive and defensive impact from the last three seasons weighted 6/3/1 by possessions (weights picked by backtest), shrunk toward a replacement-ish prior when the sample is thin, then aged with aging curves measured from this database.</li>
+        <li><b>Rookies</b> start from how past rookies drafted in the same range played (picks 1-3, 4-10, 11-20, 21-30, second round, undrafted).</li>
+        <li><b>Minutes.</b> Games × minutes per game from recent seasons, nudged toward better players, then scaled so each roster fills exactly 19,680 minutes.</li>
+        <li><b>Team strength</b> = 5 × minutes-weighted average player impact, calibrated against real results: actual net rating ≈ ${cal.a.toFixed(2)} + ${cal.b.toFixed(2)} × projection.</li>
+        <li><b>Simulation.</b> Each of ${meta.sims.toLocaleString()} seasons draws every team's true strength from the backtest error (SD ${cal.sd.toFixed(1)} points per 100), plays all ${meta.games.toLocaleString()} scheduled games (home edge ${meta.hca.toFixed(1)} points, game SD 12.5), fills unscheduled NBA Cup knockout games against an average opponent, then runs the play-in and a full best-of-7 bracket.</li>
+        <li><b>Awards</b> use conditional-logit voting models trained on past preseason projections.</li></ol>
+      <p class="note">Rosters are NBA.com's current ones, so camp invites and two-way players are included with small minutes. Rerun <code>python -m nbastats predict</code> after trades or signings.</p></div>
+    <div class="card"><h2>Backtest</h2><p class="small muted">The same procedure run on every past season, with that season's real rosters and only earlier data. Correlation between projected and actual net rating: <b>r = ${cal.r.toFixed(2)}</b>; typical miss ≈ ${(cal.sd * meta.wins_per_net).toFixed(1)} wins.</p>
+      <div class="chart-box"><canvas id="c-bt"></canvas></div></div>
+    <div class="card span2"><h3>Projected vs actual net rating, every team-season</h3><div class="chart-box tall"><canvas id="c-bts"></canvas></div></div></div>`);
+  const b = await api("predict/backtest");
+  chart("c-bt", { type: "bar", data: { labels: b.seasons.map(r => r.season), datasets: [{ label: "Miss (wins, RMSE)", data: b.seasons.map(r => r.rmse_wins), backgroundColor: series(0), borderRadius: 3 }] },
+    options: baseOptions({ plugins: { ...baseOptions().plugins, legend: { display: false }, tooltip: { ...baseOptions().plugins.tooltip, callbacks: { label: c => { const r = b.seasons[c.dataIndex]; return `RMSE ${r.rmse_wins.toFixed(1)} wins, r = ${r.r.toFixed(2)}`; } } } } }) });
+  chart("c-bts", { data: { datasets: [
+    { type: "line", label: "Perfect", data: [{ x: -15, y: -15 }, { x: 15, y: 15 }], borderColor: css("--axis"), borderDash: [4, 4], borderWidth: 1, pointRadius: 0 },
+    { type: "scatter", label: "Team-seasons", data: b.teams.map(r => ({ x: r.pred_net, y: r.net_rating, r })), backgroundColor: series(0) + "88", pointRadius: 3 }] },
+    options: baseOptions({ plugins: { ...baseOptions().plugins, legend: { display: false }, tooltip: { ...baseOptions().plugins.tooltip, filter: c => c.datasetIndex === 1, callbacks: { label: c => `${c.raw.r.season} ${c.raw.r.team_abbr}: projected ${c.raw.r.pred_net.toFixed(1)}, actual ${c.raw.r.net_rating.toFixed(1)} (${c.raw.r.w} W)` } } },
+      scales: { x: { ...baseOptions().scales.x, type: "linear", title: { display: true, text: "Projected net rating", color: css("--muted") } }, y: { ...baseOptions().scales.y, title: { display: true, text: "Actual net rating", color: css("--muted") } } } }) });
+}
+
 // ------------------------------------------------------------------ search
 
 function wireSearch(input, box, onPick) {
@@ -1171,6 +1363,7 @@ async function route() {
       case "records": return await vRecords(params);
       case "trends": return await vTrends();
       case "analysis": return await vAnalysis(parts[1], params);
+      case "predict": return await vPredict(parts[1], params);
       default: setView(`<div class="empty">Page not found.</div>`);
     }
   } catch (e) {

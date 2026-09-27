@@ -83,6 +83,25 @@ except lineups missing from the cache; add `--lineups` to (re)load lineups for a
 | **Consistency** | Game Score standard deviation, floor (10th percentile), ceiling (90th percentile), mean ÷ SD. |
 | **Signal vs noise** | Season-to-season correlation of 30+ stats, showing which ones reflect stable skill. |
 
+## Season predictions (`python -m nbastats predict`)
+
+Forecasts the next season (2026-27 by default) from the stored history plus NBA.com's current
+rosters and schedule. Rerun it after trades and signings, or mid-season after an `update`.
+
+1. **Player projections**: offensive and defensive impact from the last three seasons weighted
+   6/3/1 by possessions (weights chosen by backtest), shrunk toward a prior when the sample is
+   thin, and aged with aging curves measured from this database. Per-game stats and TS% are
+   projected the same way. Rookies start from how past picks in the same draft range played.
+2. **Minutes**: recent games × minutes per game, nudged toward better players, scaled so each
+   roster fills 48 × 5 × 82 minutes.
+3. **Team strength**: minutes-weighted player impact, calibrated on a backtest of every season
+   since 2000-01 with only earlier data (r = 0.70 vs actual net rating, typical miss ≈ 8.5 wins).
+4. **Simulation**: 10,000 seasons over the real schedule, each drawing team strength from the
+   backtest error; play-in and a full best-of-7 bracket give playoff, round-by-round and title odds.
+5. **Awards**: conditional-logit MVP and DPOY models trained on past preseason projections vs
+   actual voting (the preseason favourite historically wins about a quarter to a third of the time).
+6. **Breakouts and regression**: projected impact changes, shooting-luck candidates, team win swings.
+
 ## Website
 
 - **Dashboard**: league KPIs vs last season, leaders, team ORtg/DRtg map, net rating ranking.
@@ -93,6 +112,7 @@ except lineups missing from the cache; add `--lineups` to (re)load lineups for a
 - **Leaders**: any stat, one season or all seasons.
 - **Records**: single-game highs, triple-doubles, best teams, team game records, all-time career leaders.
 - **Trends**: where shots come from (rim, paint, mid-range, corner 3, above-the-break 3) and how pace, 3-point volume, efficiency and more changed since 1979-80.
+- **Predictions**: standings forecast with 80% win ranges and win distributions, playoff/seed/title odds, player projections (with rookies), MVP and DPOY odds, breakouts and regression candidates, and the backtest.
 - **Analysis**
   - *Impact & WAR*: offense vs defense impact map, what the box model learned, full leaderboard.
   - *Shot quality*: shot difficulty vs shot-making, usage vs efficiency.

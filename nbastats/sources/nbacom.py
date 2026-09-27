@@ -7,12 +7,14 @@ import pandas as pd
 from nba_api.stats.endpoints import (
     alltimeleadersgrids,
     commonallplayers,
+    commonteamroster,
     drafthistory,
     leaguedashplayerbiostats,
     leaguedashplayerclutch,
     leaguedashlineups,
     leaguedashplayershotlocations,
     leaguehustlestatsplayer,
+    scheduleleaguev2,
     franchisehistory,
     leaguedashplayerstats,
     leaguedashteamstats,
@@ -249,3 +251,38 @@ def lineups(season: str, team_id: int) -> pd.DataFrame:
     df = df[[c for c in keep if c in df.columns]].copy()
     df.insert(0, "season", season)
     return df
+
+
+def roster(season: str, team_id: int) -> pd.DataFrame:
+    """Current roster for a team, including rookies and two-way players."""
+    df = fetch(f"roster_{season}_{team_id}", commonteamroster.CommonTeamRoster,
+               team_id=team_id, season=season)[0]
+    df = df.rename(columns={"TeamID": "team_id", "PLAYER_ID": "player_id", "PLAYER": "name",
+                            "AGE": "age", "EXP": "exp", "POSITION": "position",
+                            "HOW_ACQUIRED": "how_acquired", "HEIGHT": "height", "SCHOOL": "school"})
+    df = df[["team_id", "player_id", "name", "age", "exp", "position", "height", "school",
+             "how_acquired"]].copy()
+    df.insert(0, "season", season)
+    return df
+
+
+def schedule(season: str) -> pd.DataFrame:
+    """Regular-season schedule (game ids starting 002)."""
+    path = CACHE / f"schedule_{season}.json"
+    if path.exists() and not REFRESH:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        CACHE.mkdir(parents=True, exist_ok=True)
+        payload = scheduleleaguev2.ScheduleLeagueV2(season=season, timeout=90).get_dict()
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    rows = []
+    for day in payload["leagueSchedule"]["gameDates"]:
+        for g in day["games"]:
+            if not str(g["gameId"]).startswith("002"):
+                continue
+            rows.append({"season": season, "game_id": g["gameId"],
+                         "game_date": g["gameDateEst"][:10],
+                         "home_id": g["homeTeam"]["teamId"], "home": g["homeTeam"]["teamTricode"],
+                         "away_id": g["awayTeam"]["teamId"], "away": g["awayTeam"]["teamTricode"],
+                         "neutral": int(bool(g.get("isNeutral"))), "label": g.get("gameLabel") or ""})
+    return pd.DataFrame(rows)

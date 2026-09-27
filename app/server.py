@@ -1,4 +1,5 @@
 """Flask JSON API + static single-page site.  Run: python -m app  (http://127.0.0.1:8050)"""
+import json
 import math
 from functools import lru_cache
 from pathlib import Path
@@ -594,6 +595,58 @@ def a_lineups():
                      net_rating, pace, efg_pct, ts_pct FROM lineups WHERE {where}
               ORDER BY net_rating DESC""", params)
     return ok({"rows": df})
+
+
+# ------------------------------------------------------------------ predictions
+
+def _pred_season():
+    s = request.args.get("season")
+    if s:
+        return s
+    if not _has("pred_meta"):
+        return None
+    return q("SELECT max(season) s FROM pred_meta")["s"].iloc[0]
+
+
+@app.get("/api/predict/meta")
+def p_meta():
+    if not _has("pred_meta"):
+        return ok({"available": False})
+    m = q("SELECT * FROM pred_meta ORDER BY season DESC")
+    rows = m.to_dict("records")
+    for r in rows:
+        r["calibration"] = json.loads(r["calibration"])
+        r["awards"] = json.loads(r["awards"])
+    return ok({"available": True, "seasons": m["season"].tolist(), "meta": rows})
+
+
+@app.get("/api/predict/teams")
+def p_teams():
+    season = _pred_season()
+    df = q("SELECT * FROM pred_teams WHERE season=? ORDER BY wins_mean DESC", (season,))
+    df["seed_dist"] = df["seed_dist"].map(json.loads)
+    df["wins_hist"] = df["wins_hist"].map(json.loads)
+    return ok({"season": season, "rows": df})
+
+
+@app.get("/api/predict/players")
+def p_players():
+    season = _pred_season()
+    return ok({"season": season,
+               "rows": q("SELECT * FROM pred_players WHERE season=? ORDER BY war DESC", (season,))})
+
+
+@app.get("/api/predict/awards")
+def p_awards():
+    season = _pred_season()
+    return ok({"season": season, "rows": q("SELECT * FROM pred_awards WHERE season=?", (season,))})
+
+
+@app.get("/api/predict/backtest")
+def p_backtest():
+    return ok({"seasons": q("SELECT * FROM pred_backtest ORDER BY season"),
+               "teams": q("""SELECT b.*, t.team_abbr FROM pred_backtest_teams b
+                             LEFT JOIN team_season_full t USING (season, team_id)""")})
 
 
 # ------------------------------------------------------------------ static site

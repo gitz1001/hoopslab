@@ -5,6 +5,7 @@
     python -m nbastats update --seasons 2023-24 2024-25
     python -m nbastats history --from 1979-80 --to 1995-96   # Basketball Reference only
     python -m nbastats models --lineups            # Elo, SRS, RAPM, impact, WAR
+    python -m nbastats predict --sims 10000        # next-season projections and simulation
 """
 import argparse
 
@@ -36,6 +37,10 @@ def main():
                                        "except lineups missing from the cache)")
     mo.add_argument("--lineups", action="store_true", help="(re)load lineups for all stored seasons")
 
+    pr = sub.add_parser("predict", help="project players, simulate the season, predict awards")
+    pr.add_argument("--season", help="target season, default the one after the latest stored")
+    pr.add_argument("--sims", type=int, default=10000)
+
     a = ap.parse_args()
     if getattr(a, "refresh", False):
         nbacom.REFRESH = bref.REFRESH = True
@@ -54,6 +59,9 @@ def main():
         if a.lineups:
             seasons = db.read_sql(con, "SELECT DISTINCT season FROM player_season_full")["season"].tolist()
         models.run(con, seasons)
+    elif a.cmd == "predict":
+        from . import predict
+        predict.run(a.season, a.sims)
     elif a.cmd == "reference":
         con = db.connect()
         build.update_reference(con)
