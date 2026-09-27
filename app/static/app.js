@@ -177,7 +177,12 @@ const PRESETS = {
   "Per 100": ["gp", "min", "pts_p100", "reb_p100", "ast_p100", "stl_p100", "blk_p100", "tov_p100", "fg3a_p100", "fta_p100"],
   Impact: ["gp", "min", "per", "ws", "ws_per_48", "obpm", "dbpm", "bpm", "vorp", "on_net_rating", "off_net_rating", "net_diff"],
   Totals: ["gp", "min", "pts", "reb", "ast", "stl", "blk", "fg3m", "ftm", "dd2", "td3"],
+  "Shot zones": ["gp", "fga_pg", "ra_share", "ra_fg_pct", "paint_share", "paint_fg_pct", "mid_share", "mid_fg_pct", "c3_share", "c3_fg_pct", "atb3_share", "atb3_fg_pct"],
+  Clutch: ["gp", "clutch_min", "clutch_pts", "clutch_pts_p36", "clutch_ts_pct", "clutch_plus_minus"],
+  Hustle: ["gp", "min", "deflections_p36", "contested_shots_p36", "screen_assists_p36", "loose_balls_recovered_p36", "box_outs_p36", "charges_drawn"],
 };
+const ZONES = [["ra", "Restricted area"], ["paint", "Paint (non-RA)"], ["mid", "Mid-range"], ["c3", "Corner 3"], ["atb3", "Above-break 3"]];
+const height = i => i ? `${Math.floor(i / 12)}'${i % 12}"` : "";
 const TEAM_PRESETS = {
   Ratings: ["w", "l", "w_pct", "off_rating", "def_rating", "net_rating", "pace", "pyth_w", "luck"],
   "Four factors": ["w", "l", "efg_pct", "tm_tov_pct", "oreb_pct", "fta_rate", "opp_efg_pct", "opp_tov_pct", "opp_oreb_pct", "opp_fta_rate"],
@@ -331,6 +336,9 @@ async function vPlayer(pid, params) {
       <div><h1>${esc(name)}</h1>
         <p class="sub">${esc(cur.pos || "")} ${cur.team_abbreviation ? "· " + teamLink(cur.team_id, cur.team_abbreviation, d.season) : ""}
         ${cur.age ? "· age " + Math.round(cur.age) : ""} · ${bio.from_year ?? ""}–${bio.to_year ?? ""}
+        ${cur.height_in ? `· ${height(cur.height_in)}, ${cur.weight ?? "?"} lb` : ""}
+        ${cur.country ? "· " + esc(cur.country) : ""}${cur.college && cur.college !== "None" ? " · " + esc(cur.college) : ""}
+        ${cur.draft_year ? `· drafted ${cur.draft_year}${cur.draft_number ? " #" + cur.draft_number : ""}` : cur.college ? "· undrafted" : ""}
         ${cur.awards ? `· <span class="chip">${esc(cur.awards)}</span>` : ""}</p></div>
       <div class="toolbar" style="margin:0"><label>Season <select id="psea">${seasons.map(s =>
         `<option ${s.season === d.season ? "selected" : ""}>${s.season}</option>`).reverse().join("")}</select></label>
@@ -349,6 +357,12 @@ async function vPlayer(pid, params) {
         <div class="chart-box"><canvas id="c-arc"></canvas></div></div>
       <div class="card flush"><div class="card-head"><h2>Most similar player-seasons</h2><span class="muted small">style profile, era-adjusted</span></div>
         <div id="sim"></div></div>
+      <div class="card"><div class="card-head"><h2>Shot profile</h2><span class="muted small">share of field goal attempts by zone</span></div>
+        <div class="chart-box short"><canvas id="c-zones"></canvas></div><div id="zt"></div></div>
+      <div class="card"><div class="card-head"><h2>Clutch and hustle</h2><span class="muted small">clutch = last 5 min, within 5 pts</span></div>
+        <div class="tiles">${["clutch_pts", "clutch_ts_pct", "clutch_plus_minus", "deflections_p36", "contested_shots_p36", "screen_assists_p36", "box_outs_p36", "charges_drawn"]
+          .map(k => `<div class="tile"><div class="k">${esc(pstat(k).label)}</div><div class="v">${fmt(cur[k], pstat(k).fmt)}</div></div>`).join("")}</div>
+        <p class="note">Hustle tracking starts in 2015-16.</p></div>
     </div>
     <div class="card flush section"><div class="card-head"><h2>Season by season</h2><div class="pills" id="ppre"></div></div><div id="seas"></div></div>
     ${d.career ? `<p class="note">Career in stored seasons: ${fmt(d.career.gp, "i")} games, ${fmt(d.career.pts_pg, "1")} pts, ${fmt(d.career.reb_pg, "1")} reb, ${fmt(d.career.ast_pg, "1")} ast per game, ${fmt(d.career.ts_pct, "p")} TS%, ${fmt(d.career.ws, "1")} win shares.</p>` : ""}
@@ -399,6 +413,14 @@ async function vPlayer(pid, params) {
   drawArc("pts_pg");
   document.getElementById("arc").onchange = e => drawArc(e.target.value);
 
+  if (cur.ra_share !== undefined && cur.ra_share !== null) {
+    chart("c-zones", { type: "bar", data: { labels: ZONES.map(z => z[1]), datasets: [{ label: "Share of FGA",
+      data: ZONES.map(([z]) => (cur[z + "_share"] ?? 0) * 100), backgroundColor: series(0), borderRadius: 4, barPercentage: 0.7 }] },
+      options: baseOptions({ indexAxis: "y", plugins: { ...baseOptions().plugins, legend: { display: false }, tooltip: { ...baseOptions().plugins.tooltip, callbacks: {
+        label: c => { const z = ZONES[c.dataIndex][0]; return `${c.parsed.x.toFixed(1)}% of shots, ${fmt(cur[z + "_fg_pct"], "p")}% FG (${fmt(cur[z + "_fgm"], "i")}/${fmt(cur[z + "_fga"], "i")})`; } } } },
+        scales: { x: { ...baseOptions().scales.x, beginAtZero: true }, y: { ...baseOptions().scales.y, ticks: { color: css("--ink-2") } } } }) });
+    document.getElementById("zt").innerHTML = `<p class="note">FG% by zone: ${ZONES.map(([z, l]) => `${l} ${fmt(cur[z + "_fg_pct"], "p")}%`).join(" · ")}</p>`;
+  }
   table(document.getElementById("sim"), d.similar, [
     { key: "player_name", label: "Player", cls: "l", render: r => playerLink(r.player_id, r.player_name, r.season) },
     { key: "season", label: "Season", cls: "l" }, { key: "pts_pg", label: "PTS", fmt: "1" },
@@ -423,9 +445,13 @@ async function vPlayer(pid, params) {
       { key: "plus_minus", label: "+/-", fmt: "i" }], { sort: "season", asc: true });
   }
   if (d.history.length) {
-    const hs = d.history.map(r => ({ ...r, pts_pg: r.pts / r.g, trb_pg: r.trb / r.g, ast_pg: r.ast / r.g }));
+    const hs = d.history.map(r => ({ ...r, pts_pg: r.pts / r.g, trb_pg: r.trb / r.g, ast_pg: r.ast / r.g,
+      stl_pg: r.stl / r.g, blk_pg: r.blk / r.g, mp_pg: r.mp / r.g, ts_pct: r.pts / (2 * (r.fga + 0.44 * r.fta)) }));
     table(document.getElementById("hist"), hs, [{ key: "season", label: "Season", cls: "l" }, { key: "teams", label: "Team", cls: "l" },
-      { key: "g", label: "G", fmt: "i" }, { key: "pts_pg", label: "PTS", fmt: "1" }, { key: "trb_pg", label: "REB", fmt: "1" }, { key: "ast_pg", label: "AST", fmt: "1" }],
+      { key: "age", label: "Age", fmt: "i" }, { key: "g", label: "G", fmt: "i" }, { key: "mp_pg", label: "MIN", fmt: "1" },
+      { key: "pts_pg", label: "PTS", fmt: "1" }, { key: "trb_pg", label: "REB", fmt: "1" }, { key: "ast_pg", label: "AST", fmt: "1" },
+      { key: "stl_pg", label: "STL", fmt: "1" }, { key: "blk_pg", label: "BLK", fmt: "1" }, { key: "ts_pct", label: "TS%", fmt: "p" },
+      { key: "per", label: "PER", fmt: "1" }, { key: "ws", label: "WS", fmt: "1" }, { key: "bpm", label: "BPM", fmt: "1" }, { key: "vorp", label: "VORP", fmt: "1" }],
       { sort: "season", asc: true });
   }
   table(document.getElementById("glog"), d.games, [
@@ -597,11 +623,22 @@ async function vRecords(params) {
 // ---------------- trends
 async function vTrends() {
   setView(`<div class="hero"><div><h1>How the game has changed</h1><p class="sub">League-wide trends across every stored season. Shooting trends reach back before 1996-97 using Basketball Reference totals when the history has been loaded.</p></div></div>
-    <div class="grid g2" id="tr"></div>
+    <div class="card" id="zcard"><div class="card-head"><h2>Where shots come from</h2><span class="muted small">share of all field goal attempts</span></div>
+      <div class="chart-box tall"><canvas id="c-zmix"></canvas></div><p class="note">The mid-range shot has been traded for threes and shots at the rim.</p></div>
+    <div class="grid g2 section" id="tr"></div>
     <div class="card section"><div class="card-head"><h2>Team spread over time</h2><select id="tts">${statOptions(S.meta.team_stats, "net_rating")}</select></div>
       <div class="chart-box tall"><canvas id="c-tspread"></canvas></div><p class="note">Each dot is one team-season; hover for the team.</p></div>`);
   const d = await api("league");
   const rows = d.rows, hist = d.history || [];
+  const z = d.zones || [];
+  if (z.length) {
+    const tot = r => ZONES.reduce((a, [k]) => a + (r[k] || 0), 0);
+    chart("c-zmix", { type: "line", data: { labels: z.map(r => r.season), datasets: ZONES.map(([k, l], i) =>
+      lineDs(l, z.map(r => r[k] / tot(r) * 100), i, { pointRadius: 2 })) },
+      options: baseOptions({ interaction: { mode: "index", intersect: false }, plugins: { ...baseOptions().plugins, tooltip: { ...baseOptions().plugins.tooltip, callbacks: {
+        label: c => { const r = z[c.dataIndex], k = ZONES[c.datasetIndex][0]; return `${c.dataset.label}: ${c.parsed.y.toFixed(1)}% of shots, ${(r[k + "_m"] / r[k] * 100).toFixed(1)}% FG`; } } } },
+        scales: { x: baseOptions().scales.x, y: { ...baseOptions().scales.y, beginAtZero: true, ticks: { color: css("--muted"), callback: v => v + "%" } } } }) });
+  } else document.getElementById("zcard").remove();
   const charts = [["fg3a_rate", true], ["ts_pct", true], ["pace", false], ["ortg", false], ["pts_pg", false], ["fg3_pct", true], ["fta_rate", true], ["ast_pg", false]];
   document.getElementById("tr").innerHTML = charts.map(([k]) =>
     `<div class="card"><h3>${esc(S.meta.league_stats[k].label)}</h3><div class="chart-box short"><canvas id="c-tr-${k}"></canvas></div></div>`).join("");
@@ -636,6 +673,8 @@ const ANALYSES = {
   projections: ["Projections", "Marcel-style forecasts for next season."],
   aging: ["Aging curves", "How stats change with age, using the delta method."],
   wins: ["What wins", "Which of the four factors explain team success."],
+  draft: ["Draft value", "What each draft slot is worth in career win shares, plus the biggest steals."],
+  origins: ["Origins", "The league going global: countries, colleges, height and age over time."],
 };
 
 async function vAnalysis(sub, params) {
@@ -645,7 +684,7 @@ async function vAnalysis(sub, params) {
     return;
   }
   const nav = `<div class="toolbar">${Object.entries(ANALYSES).map(([k, [t]]) => `<a href="#/analysis/${k}"><button class="${k === sub ? "primary" : ""}">${t}</button></a>`).join("")}</div>`;
-  const fn = { compare: aCompare, explorer: aExplorer, archetypes: aArchetypes, projections: aProjections, aging: aAging, wins: aWins }[sub];
+  const fn = { compare: aCompare, explorer: aExplorer, archetypes: aArchetypes, projections: aProjections, aging: aAging, wins: aWins, draft: aDraft, origins: aOrigins }[sub];
   if (fn) await fn(nav, params);
 }
 
@@ -806,6 +845,56 @@ async function aWins(nav) {
   ] }, options: baseOptions({ plugins: { ...baseOptions().plugins, legend: { display: false }, pointLabels: { enabled: true },
     tooltip: { ...baseOptions().plugins.tooltip, filter: c => c.datasetIndex === 1, callbacks: { label: c => `${c.raw.r.team_name}: ${c.raw.r.w} wins, ${c.raw.r.pyth_w.toFixed(1)} expected (${c.raw.r.luck > 0 ? "+" : ""}${c.raw.r.luck.toFixed(1)})` } } },
     scales: { x: { ...baseOptions().scales.x, type: "linear", title: { display: true, text: "Pythagorean wins", color: css("--muted") } }, y: { ...baseOptions().scales.y, title: { display: true, text: "Actual wins", color: css("--muted") } } } }) });
+}
+
+async function aDraft(nav, params) {
+  setView(`${nav}<h1>Draft value</h1><p class="sub">Career win shares (Basketball Reference) earned in the stored seasons by every player drafted since the first stored season. Only drafts at least six years old count toward the pick averages, so careers have time to develop.</p>
+    <div class="grid g2"><div class="card span2"><h3>Average career win shares by overall pick</h3><div class="chart-box tall"><canvas id="c-dp"></canvas></div><p class="note" id="dn"></p></div>
+    <div class="card flush"><div class="card-head"><h2>Biggest steals</h2><span class="muted small">picked 15th or later</span></div><div id="dst"></div></div>
+    <div class="card flush"><div class="card-head"><h2>Draft class</h2><select id="dy"></select></div><div id="dcl"></div></div></div>`);
+  const d = await api("analysis/draft");
+  if (!d.picks.length) { document.getElementById("dn").textContent = "Load more seasons to see draft value."; return; }
+  chart("c-dp", { type: "bar", data: { labels: d.picks.map(p => p.overall_pick), datasets: [
+    { label: "Average career WS", data: d.picks.map(p => p.avg_ws), backgroundColor: series(0), borderRadius: 3 }] },
+    options: baseOptions({ plugins: { ...baseOptions().plugins, legend: { display: false }, tooltip: { ...baseOptions().plugins.tooltip, callbacks: {
+      title: it => `Pick ${d.picks[it[0].dataIndex].overall_pick}`,
+      label: c => { const p = d.picks[c.dataIndex]; return [`Average ${p.avg_ws.toFixed(1)} WS, median ${p.median_ws.toFixed(1)} (${p.n} players)`,
+        `${(p.hit_rate * 100).toFixed(0)}% lasted 5+ seasons`, `Best: ${p.best_name} (${p.best_year}), ${p.best_ws.toFixed(1)} WS`]; } } } },
+      scales: { x: { ...baseOptions().scales.x, title: { display: true, text: "Overall pick", color: css("--muted") } }, y: baseOptions().scales.y } }) });
+  document.getElementById("dn").textContent = `Drafts through ${d.mature_through}. Hover a bar for the best player taken at that pick.`;
+  table(document.getElementById("dst"), d.steals, [
+    { key: "player_name", label: "Player", cls: "l", render: r => playerLink(r.player_id, r.player_name) },
+    { key: "draft_year", label: "Year", fmt: "i" }, { key: "overall_pick", label: "Pick", fmt: "i" },
+    { key: "team_abbreviation", label: "By", cls: "l" }, { key: "ws", label: "WS", fmt: "1" }], { sort: "ws", short: true });
+  const years = [...new Set(d.draft.map(r => r.draft_year))].sort((a, b) => b - a);
+  const sel = document.getElementById("dy");
+  sel.innerHTML = years.map(y => `<option>${y}</option>`).join("");
+  sel.value = params.get("year") || years[Math.min(6, years.length - 1)];
+  const drawClass = () => table(document.getElementById("dcl"), d.draft.filter(r => r.draft_year === +sel.value), [
+    { key: "overall_pick", label: "Pick", fmt: "i", cls: "l" },
+    { key: "player_name", label: "Player", cls: "l", render: r => r.seasons ? playerLink(r.player_id, r.player_name) : esc(r.player_name) },
+    { key: "organization", label: "From", cls: "l" }, { key: "seasons", label: "Seasons", fmt: "i" },
+    { key: "ws", label: "WS", fmt: "1" }, { key: "vorp", label: "VORP", fmt: "1" }], { sort: "overall_pick", asc: true, short: true });
+  sel.onchange = drawClass;
+  drawClass();
+}
+
+async function aOrigins(nav) {
+  setView(`${nav}<h1>Origins</h1><p class="sub">Where players come from and how the player pool has changed. Shares are weighted by minutes played.</p>
+    <div class="grid g2"><div class="card"><h3>International players' share of minutes</h3><div class="chart-box"><canvas id="c-intl"></canvas></div></div>
+    <div class="card"><h3>Minutes-weighted height (inches)</h3><div class="chart-box"><canvas id="c-ht"></canvas></div></div>
+    <div class="card flush"><div class="card-head"><h2>Countries, ${esc(S.season)}</h2></div><div id="oc"></div></div>
+    <div class="card flush"><div class="card-head"><h2>Colleges, ${esc(S.season)}</h2></div><div id="ocl"></div></div></div>`);
+  const d = await api(`analysis/origins?season=${S.season}`);
+  const t = d.trend;
+  const one = (id, label, vals, extra = {}) => chart(id, { type: "line", data: { labels: t.map(r => r.season), datasets: [lineDs(label, vals, 0, { pointRadius: 3 })] },
+    options: baseOptions({ plugins: { ...baseOptions().plugins, legend: { display: false } }, ...extra }) });
+  one("c-intl", "International share of minutes (%)", t.map(r => r.intl_min_share * 100));
+  one("c-ht", "Average height", t.map(r => r.avg_height));
+  const cols = key => [{ key, label: key === "country" ? "Country" : "College", cls: "l" }, { key: "players", label: "Players", fmt: "i" },
+    { key: "minutes", label: "Minutes", fmt: "i" }, { key: "names", label: "Top players", cls: "l" }];
+  table(document.getElementById("oc"), d.countries, cols("country"), { sort: "minutes", short: true });
+  table(document.getElementById("ocl"), d.colleges, cols("college"), { sort: "minutes", short: true });
 }
 
 // ------------------------------------------------------------------ search

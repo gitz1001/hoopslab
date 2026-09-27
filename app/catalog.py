@@ -87,6 +87,34 @@ PLAYER_STATS = {
     "net_diff": ("On/off net", "1", "Impact", True),
     "ortg_diff": ("On/off ORtg", "1", "Impact", True),
     "drtg_diff": ("On/off DRtg", "1", "Impact", False),
+    # Shot zones (NBA.com shot locations)
+    "ra_share": ("Rim share", "p", "Shot zones", None),
+    "paint_share": ("Paint share", "p", "Shot zones", None),
+    "mid_share": ("Mid-range share", "p", "Shot zones", None),
+    "c3_share": ("Corner 3 share", "p", "Shot zones", None),
+    "atb3_share": ("Above-break 3 share", "p", "Shot zones", None),
+    "ra_fg_pct": ("Rim FG%", "p", "Shot zones", True),
+    "paint_fg_pct": ("Paint FG%", "p", "Shot zones", True),
+    "mid_fg_pct": ("Mid-range FG%", "p", "Shot zones", True),
+    "c3_fg_pct": ("Corner 3 FG%", "p", "Shot zones", True),
+    "atb3_fg_pct": ("Above-break 3 FG%", "p", "Shot zones", True),
+    # Clutch: last 5 minutes, score within 5
+    "clutch_min": ("Clutch MIN", "i", "Clutch", True),
+    "clutch_pts": ("Clutch PTS", "i", "Clutch", True),
+    "clutch_pts_p36": ("Clutch PTS/36", "1", "Clutch", True),
+    "clutch_ts_pct": ("Clutch TS%", "p", "Clutch", True),
+    "clutch_plus_minus": ("Clutch +/-", "i", "Clutch", True),
+    # Hustle (2015-16 onward)
+    "deflections_p36": ("Deflections/36", "1", "Hustle", True),
+    "contested_shots_p36": ("Contests/36", "1", "Hustle", True),
+    "screen_assists_p36": ("Screen assists/36", "1", "Hustle", True),
+    "loose_balls_recovered_p36": ("Loose balls/36", "1", "Hustle", True),
+    "box_outs_p36": ("Box outs/36", "1", "Hustle", True),
+    "charges_drawn": ("Charges drawn", "i", "Hustle", True),
+    # Bio
+    "height_in": ("Height (in)", "i", "Bio", None),
+    "weight": ("Weight (lb)", "i", "Bio", None),
+    "draft_number": ("Draft pick", "i", "Bio", False),
 }
 
 TEAM_STATS = {

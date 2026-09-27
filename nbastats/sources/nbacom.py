@@ -7,6 +7,11 @@ import pandas as pd
 from nba_api.stats.endpoints import (
     alltimeleadersgrids,
     commonallplayers,
+    drafthistory,
+    leaguedashplayerbiostats,
+    leaguedashplayerclutch,
+    leaguedashplayershotlocations,
+    leaguehustlestatsplayer,
     franchisehistory,
     leaguedashplayerstats,
     leaguedashteamstats,
@@ -24,11 +29,28 @@ REFRESH = False
 _last_call = 0.0
 
 
+def _headers(hdr) -> list[str]:
+    """Most endpoints have flat headers; shot-location endpoints nest them by zone."""
+    if not hdr or not isinstance(hdr[0], dict):
+        return hdr
+    cats = next(h for h in hdr if h["name"] == "SHOT_CATEGORY")
+    cols = next(h for h in hdr if h["name"] == "columns")["columnNames"]
+    skip, span = cats["columnsToSkip"], cats["columnSpan"]
+    zone = {"Restricted Area": "ra", "In The Paint (Non-RA)": "paint", "Mid-Range": "mid",
+            "Left Corner 3": "lc3", "Right Corner 3": "rc3", "Above the Break 3": "atb3",
+            "Backcourt": "back", "Corner 3": "c3"}
+    names = cols[:skip]
+    for cat in cats["columnNames"]:
+        names += [f"{zone.get(cat, cat)}_{c}" for c in cols[skip: skip + span]]
+    return names
+
+
 def _frames(payload: dict) -> list[pd.DataFrame]:
     sets = payload.get("resultSets") or payload.get("resultSet")
     if isinstance(sets, dict):
         sets = [sets]
-    return [pd.DataFrame(s["rowSet"], columns=s["headers"]) for s in sets]
+    return [pd.DataFrame(s["rowSet"], columns=_headers(s["headers"])[: len(s["rowSet"][0])]
+                         if s["rowSet"] else _headers(s["headers"])) for s in sets]
 
 
 def fetch(key: str, endpoint, **params) -> list[pd.DataFrame]:
@@ -163,4 +185,50 @@ def onoff(season: str, team_id: int) -> pd.DataFrame:
     df["drtg_diff"] = df["on_DEF_RATING"] - df["off_DEF_RATING"]
     df.insert(0, "season", season)
     df.insert(1, "team_id", team_id)
+    return df
+
+
+def draft_history() -> pd.DataFrame:
+    return fetch("drafthistory", drafthistory.DraftHistory)[0]
+
+
+def player_bio(season: str) -> pd.DataFrame:
+    df = fetch(f"bio_{season}", leaguedashplayerbiostats.LeagueDashPlayerBioStats, season=season)[0]
+    keep = ["PLAYER_ID", "PLAYER_HEIGHT", "PLAYER_HEIGHT_INCHES", "PLAYER_WEIGHT", "COLLEGE",
+            "COUNTRY", "DRAFT_YEAR", "DRAFT_ROUND", "DRAFT_NUMBER"]
+    df = df[keep].copy()
+    df.insert(0, "season", season)
+    return df
+
+
+def shot_locations(season: str) -> pd.DataFrame:
+    """FGM/FGA by court zone (restricted area, paint, mid-range, corner 3, above-the-break 3)."""
+    df = fetch(f"shotloc_{season}", leaguedashplayershotlocations.LeagueDashPlayerShotLocations,
+               season=season, per_mode_detailed="Totals")[0]
+    df = df[["PLAYER_ID"] + [c for c in df.columns if c[:3] in ("ra_", "pai", "mid", "c3_", "atb", "lc3", "rc3")]]
+    df.insert(0, "season", season)
+    return df
+
+
+def clutch(season: str) -> pd.DataFrame:
+    """Last 5 minutes, score within 5 points."""
+    df = fetch(f"clutch_{season}", leaguedashplayerclutch.LeagueDashPlayerClutch, season=season,
+               per_mode_detailed="Totals")[0]
+    keep = ["PLAYER_ID", "GP", "MIN", "PTS", "FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA", "AST",
+            "TOV", "PLUS_MINUS", "W", "L"]
+    df = df[keep].rename(columns=lambda c: c if c == "PLAYER_ID" else f"CLUTCH_{c}")
+    df.insert(0, "season", season)
+    return df
+
+
+def hustle(season: str) -> pd.DataFrame:
+    """Hustle stats exist from 2015-16 on."""
+    if int(season[:4]) < 2015:
+        return pd.DataFrame()
+    df = fetch(f"hustle_{season}", leaguehustlestatsplayer.LeagueHustleStatsPlayer, season=season,
+               per_mode_time="Totals")[0]
+    keep = ["PLAYER_ID", "CONTESTED_SHOTS", "CONTESTED_SHOTS_3PT", "DEFLECTIONS", "CHARGES_DRAWN",
+            "SCREEN_ASSISTS", "SCREEN_AST_PTS", "LOOSE_BALLS_RECOVERED", "BOX_OUTS"]
+    df = df[[c for c in keep if c in df.columns]]
+    df.insert(0, "season", season)
     return df

@@ -111,6 +111,45 @@ def build_player_season(base, adv, team_base, team_adv, bref_adv, onoff, games) 
     return df
 
 
+ZONES = ["ra", "paint", "mid", "c3", "atb3"]
+
+
+def add_extras(df, bio=None, shots=None, clutch=None, hustle=None) -> pd.DataFrame:
+    """Bio/draft info, shot-zone profile, clutch and hustle numbers for each player-season."""
+    if bio is not None and not bio.empty:
+        b = bio.drop(columns=["season"]).drop_duplicates("player_id").copy()
+        b = b.rename(columns={"player_height_inches": "height_in", "player_weight": "weight"})
+        for c in ["weight", "draft_year", "draft_round", "draft_number"]:
+            b[c] = pd.to_numeric(b[c], errors="coerce")
+        df = df.merge(b[["player_id", "height_in", "weight", "college", "country", "draft_year",
+                         "draft_round", "draft_number"]], on="player_id", how="left")
+    if shots is not None and not shots.empty:
+        z = shots.drop(columns=["season"]).drop_duplicates("player_id").copy()
+        z = z.apply(lambda col: pd.to_numeric(col, errors="coerce"))
+        tot = sum(z[f"{k}_fga"].fillna(0) for k in ZONES)
+        out = pd.DataFrame({"player_id": z["player_id"]})
+        for k in ZONES:
+            out[f"{k}_fga"] = z[f"{k}_fga"]
+            out[f"{k}_fgm"] = z[f"{k}_fgm"]
+            out[f"{k}_share"] = _div(z[f"{k}_fga"], tot)
+            out[f"{k}_fg_pct"] = _div(z[f"{k}_fgm"], z[f"{k}_fga"])
+        df = df.merge(out, on="player_id", how="left")
+    if clutch is not None and not clutch.empty:
+        c = clutch.drop(columns=["season"]).drop_duplicates("player_id")
+        c = c.assign(clutch_ts_pct=_div(c.clutch_pts, 2 * (c.clutch_fga + 0.44 * c.clutch_fta)),
+                     clutch_pts_p36=_div(c.clutch_pts * 36, c.clutch_min))
+        df = df.merge(c[["player_id", "clutch_gp", "clutch_min", "clutch_pts", "clutch_fga",
+                         "clutch_ts_pct", "clutch_pts_p36", "clutch_plus_minus"]],
+                      on="player_id", how="left")
+    if hustle is not None and not hustle.empty:
+        hdf = hustle.drop(columns=["season"]).drop_duplicates("player_id")
+        df = df.merge(hdf, on="player_id", how="left")
+        for c in ["contested_shots", "deflections", "screen_assists", "loose_balls_recovered",
+                  "box_outs"]:
+            df[f"{c}_p36"] = _div(df[c] * 36, df["min"])
+    return df
+
+
 def build_team_season(team_base, team_adv, team_ff, standings, team_opp=None) -> pd.DataFrame:
     df = team_base.copy()
     for c in ["pts", "reb", "ast", "stl", "blk", "tov", "fg3m", "fg3a", "fga", "fta"]:

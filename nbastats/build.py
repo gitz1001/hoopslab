@@ -26,6 +26,7 @@ def update_reference(con):
     db.replace_rows(con, "players", nbacom.all_players())
     db.replace_rows(con, "franchise_history", _lower(nbacom.franchise_history()))
     db.replace_rows(con, "alltime_leaders", nbacom.alltime_leaders(50))
+    db.replace_rows(con, "draft_history", _lower(nbacom.draft_history()))
 
 
 def update_season(con, season: str, use_bref=True, use_onoff=True, playoffs=True):
@@ -38,6 +39,12 @@ def update_season(con, season: str, use_bref=True, use_onoff=True, playoffs=True
     t_ff = _lower(nbacom.team_season(season, "Four Factors"))
     t_opp = _lower(nbacom.team_season(season, "Opponent"))
     stand = _lower(nbacom.standings(season))
+
+    log(f"{season}: bio, shot zones, clutch, hustle")
+    bio = _lower(nbacom.player_bio(season))
+    shots = _lower(nbacom.shot_locations(season))
+    clutch = _lower(nbacom.clutch(season))
+    hustle = _lower(nbacom.hustle(season))
 
     log(f"{season}: game logs")
     pg = _lower(nbacom.game_logs(season, "P"))
@@ -77,12 +84,17 @@ def update_season(con, season: str, use_bref=True, use_onoff=True, playoffs=True
     db.replace_rows(con, "team_game", tg.drop(columns=["game_score"]), where)
     if not onoff.empty:
         db.replace_rows(con, "player_onoff", onoff, where)
+    for name, frame in [("player_bio", bio), ("player_shot_zones", shots),
+                        ("player_clutch", clutch), ("player_hustle", hustle)]:
+        if not frame.empty:
+            db.replace_rows(con, name, frame, where)
     if not b_adv.empty:
         db.replace_rows(con, "bref_advanced", b_adv, where)
 
     log(f"{season}: computing derived tables")
     rs_games = pg[pg.season_type == RS]
     full = metrics.build_player_season(base, adv, t_base, t_adv, b_adv, onoff, rs_games)
+    full = metrics.add_extras(full, bio, shots, clutch, hustle)
     tfull = metrics.build_team_season(t_base, t_adv, t_ff, stand, t_opp)
     abbr = nbacom.teams().set_index("team_id")["abbr"]
     tfull.insert(3, "team_abbr", tfull["team_id"].map(abbr))

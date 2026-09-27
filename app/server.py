@@ -58,6 +58,15 @@ def safe_col(col, allowed):
 
 PLAYER_COLS = list(PLAYER_STATS)
 ID_COLS = ["player_id", "player_name", "season", "team_id", "team_abbreviation", "age", "pos"]
+EXTRA_COLS = ["college", "country", "draft_year"]
+
+
+def player_cols():
+    """Catalog columns that exist in the table (an older database may lack newer sources)."""
+    con = db.connect()
+    have = {r[1] for r in con.execute("PRAGMA table_info(player_season_full)")}
+    con.close()
+    return [c for c in ID_COLS + EXTRA_COLS + PLAYER_COLS if c in have]
 
 
 # ------------------------------------------------------------------ meta
@@ -115,7 +124,7 @@ def players():
     season = arg_season()
     min_gp = int(request.args.get("min_gp", 0))
     min_min = int(request.args.get("min_min", 0))
-    df = q(f"""SELECT {', '.join(ID_COLS + PLAYER_COLS)} FROM player_season_full
+    df = q(f"""SELECT {', '.join(player_cols())} FROM player_season_full
                WHERE season=? AND gp >= ? AND min >= ?""", (season, min_gp, min_min))
     return ok({"season": season, "rows": df})
 
@@ -146,11 +155,16 @@ def player(pid):
             career[k] = float(seasons[k].sum()) if k in seasons else None
     bref_hist = pd.DataFrame()
     con = db.connect()
-    if db.table_exists(con, "bref_history") and len(seasons) and seasons["bref_id"].notna().any():
-        bid = seasons["bref_id"].dropna().iloc[0]
-        bref_hist = db.read_sql(con, """SELECT season, teams, age, pos, g, mp, pts, trb, ast
-                                        FROM bref_history WHERE bref_id=? ORDER BY season""",
-                                (bid,))
+    if db.table_exists(con, "bref_history"):
+        cols = """season, teams, age, pos, games g, mp, pts, trb, ast, stl, blk, fg, fga,
+                  fg3, fg3a, ft, fta, per, ws, bpm, vorp"""
+        if "bref_id" in seasons and seasons["bref_id"].notna().any():
+            bref_hist = db.read_sql(con, f"SELECT {cols} FROM bref_history WHERE bref_id=? ORDER BY season",
+                                    (seasons["bref_id"].dropna().iloc[0],))
+        elif len(bio):
+            # retired before 1996-97: match Basketball Reference history by name
+            bref_hist = db.read_sql(con, f"SELECT {cols} FROM bref_history WHERE bref_name=? ORDER BY season",
+                                    (bio["name"].iloc[0],))
     con.close()
     pct = analysis.percentiles(pid, season) if season else None
     sim = analysis.similar(pid, season) if season else []
@@ -176,7 +190,7 @@ def team(tid):
     history = q("""SELECT season, w, l, w_pct, off_rating, def_rating, net_rating, pace,
                           playoffrank, conference FROM team_season_full WHERE team_id=?
                    ORDER BY season""", (tid,))
-    roster = q(f"""SELECT {', '.join(ID_COLS + PLAYER_COLS)} FROM player_season_full
+    roster = q(f"""SELECT {', '.join(player_cols())} FROM player_season_full
                    WHERE season=? AND team_id=? ORDER BY min DESC""", (season, tid))
     onoff = q("""SELECT o.*, p.name player_name FROM player_onoff o
                  LEFT JOIN players p ON p.player_id=o.player_id
@@ -280,8 +294,17 @@ def league():
             hist["fg3a_rate"] = hist.fg3a / hist.fga
             hist["fg3_pct"] = hist.fg3m / hist.fg3a
             hist["fta_rate"] = hist.fta / hist.fga
+    zones = pd.DataFrame()
+    have = {r[1] for r in con.execute("PRAGMA table_info(player_season_full)")}
+    if "ra_fga" in have:
+        zones = db.read_sql(con, """SELECT season, sum(ra_fga) ra, sum(paint_fga) paint,
+                                    sum(mid_fga) mid, sum(c3_fga) c3, sum(atb3_fga) atb3,
+                                    sum(ra_fgm) ra_m, sum(paint_fgm) paint_m, sum(mid_fgm) mid_m,
+                                    sum(c3_fgm) c3_m, sum(atb3_fgm) atb3_m
+                                    FROM player_season_full GROUP BY season ORDER BY season""")
+        zones = zones[zones.ra.notna() & (zones.ra > 0)]
     con.close()
-    return ok({"rows": df, "history": hist})
+    return ok({"rows": df, "history": hist, "zones": zones})
 
 
 # ------------------------------------------------------------------ analysis
@@ -341,6 +364,79 @@ def a_team_trend():
     stat = safe_col(request.args.get("stat", "net_rating"), TEAM_STATS)
     df = q(f"SELECT season, team_abbr, {stat} v FROM team_season_full ORDER BY season")
     return ok({"stat": stat, "rows": df})
+
+
+@app.get("/api/analysis/draft")
+def a_draft():
+    """Career value by draft slot, for drafts whose careers fall inside the stored seasons."""
+    con = db.connect()
+    if not db.table_exists(con, "draft_history"):
+        con.close()
+        return ok({"picks": [], "classes": [], "steals": [], "draft": []})
+    last = int(db.read_sql(con, "SELECT max(season) s FROM player_season_full")["s"].iloc[0][:4])
+    first = int(db.read_sql(con, "SELECT min(season) s FROM player_season_full")["s"].iloc[0][:4])
+    df = db.read_sql(con, """
+        SELECT d.person_id player_id, d.player_name, CAST(d.season AS INTEGER) draft_year,
+               d.overall_pick, d.team_abbreviation, d.organization,
+               count(f.season) seasons, coalesce(sum(f.min), 0) minutes,
+               coalesce(sum(f.ws), 0) ws, coalesce(sum(f.vorp), 0) vorp, max(f.bpm) best_bpm
+        FROM draft_history d LEFT JOIN player_season_full f ON f.player_id = d.person_id
+        WHERE CAST(d.season AS INTEGER) BETWEEN ? AND ? AND d.overall_pick > 0
+        GROUP BY d.person_id, d.season""", (first, last))
+    con.close()
+    mature_through = last - 6  # give careers at least six seasons to play out
+    mature = df[df.draft_year <= mature_through]
+    picks = mature.groupby("overall_pick").agg(
+        n=("player_id", "size"), avg_ws=("ws", "mean"), median_ws=("ws", "median"),
+        avg_seasons=("seasons", "mean"),
+        hit_rate=("seasons", lambda s: float((s >= 5).mean()))).reset_index()
+    best = (mature.sort_values("ws", ascending=False).groupby("overall_pick").head(1)
+            [["overall_pick", "player_id", "player_name", "draft_year", "ws"]])
+    picks = picks.merge(best.rename(columns={"player_id": "best_id", "player_name": "best_name",
+                                             "draft_year": "best_year", "ws": "best_ws"}),
+                        on="overall_pick", how="left")
+    picks = picks[picks.overall_pick <= 60]
+    classes = (df.groupby("draft_year").agg(total_ws=("ws", "sum"), players=("player_id", "size"))
+               .reset_index())
+    steals = (df[df.overall_pick >= 15].sort_values("ws", ascending=False).head(15)
+              [["player_id", "player_name", "draft_year", "overall_pick", "team_abbreviation", "ws"]])
+    return ok({"picks": picks, "classes": classes, "steals": steals, "draft": df,
+               "mature_through": mature_through})
+
+
+@app.get("/api/analysis/origins")
+def a_origins():
+    season = arg_season()
+    con = db.connect()
+    have = {r[1] for r in con.execute("PRAGMA table_info(player_season_full)")}
+    if "country" not in have:
+        con.close()
+        return ok({"trend": [], "countries": [], "colleges": []})
+    trend = db.read_sql(con, """
+        SELECT season,
+               sum(CASE WHEN country IS NOT NULL AND country <> 'USA' THEN min ELSE 0 END) * 1.0
+                 / sum(min) intl_min_share,
+               count(DISTINCT CASE WHEN country <> 'USA' THEN player_id END) intl_players,
+               count(DISTINCT country) countries,
+               sum(height_in * min) / sum(CASE WHEN height_in IS NOT NULL THEN min END) avg_height,
+               sum(age * min) / sum(min) avg_age
+        FROM player_season_full GROUP BY season ORDER BY season""")
+    countries = db.read_sql(con, """SELECT country, count(*) players, sum(min) minutes,
+                                    group_concat(player_name, ', ') names
+                                    FROM (SELECT * FROM player_season_full WHERE season=?
+                                          ORDER BY min DESC)
+                                    WHERE country IS NOT NULL GROUP BY country
+                                    ORDER BY minutes DESC LIMIT 25""", (season,))
+    colleges = db.read_sql(con, """SELECT college, count(*) players, sum(min) minutes,
+                                   group_concat(player_name, ', ') names
+                                   FROM (SELECT * FROM player_season_full WHERE season=?
+                                         ORDER BY min DESC)
+                                   WHERE college IS NOT NULL AND college NOT IN ('None', '')
+                                   GROUP BY college ORDER BY minutes DESC LIMIT 25""", (season,))
+    con.close()
+    for d in (countries, colleges):
+        d["names"] = d["names"].map(lambda s: ", ".join(str(s).split(", ")[:4]))
+    return ok({"trend": trend, "countries": countries, "colleges": colleges})
 
 
 # ------------------------------------------------------------------ static site
