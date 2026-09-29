@@ -20,6 +20,14 @@ provider IP ranges (AWS, GCP, Azure, Render, Fly…). The pipeline therefore run
 that can reach it (your PC), and the website only ever reads the exported file. The website
 has no NBA.com or Basketball Reference dependency at runtime.
 
+**Built for a small free host:** export also precomputes the heavy analysis (all-time records,
+similar players for every qualified player-season, clusters, projections, aging curves, model
+summaries: about 8,900 results) into a `precomputed` table. The site answers those with one
+indexed read, never imports scikit-learn in normal use, and pages load in stages (the player page
+shows first, then percentiles and similar players). Measured locally: about 90 MB of memory
+after visiting every page, every API call under 0.2 s. That leaves plenty of headroom on
+Render's free plan (512 MB, 0.1 CPU).
+
 **What gets served:** `python -m nbastats export` copies only the tables the site reads, drops
 raw source tables, replaces ~180 MB of record indexes with a precomputed top-games table,
 switches off WAL and vacuums. The site opens it with `NBA_READONLY=1` (read-only + immutable),

@@ -1,6 +1,29 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "hoopslab", "runtimeExecutable": "python", "runtimeArgs": ["-m", "app"], "port": 8050 }
+    {
+      "name": "hoopslab",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "app"
+      ],
+      "port": 8050
+    },
+    {
+      "name": "hoopslab-serve",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "app",
+        "--port",
+        "8051"
+      ],
+      "port": 8051,
+      "env": {
+        "NBA_DB_PATH": "data/nba_serve.db",
+        "NBA_READONLY": "1"
+      }
+    }
   ]
 }

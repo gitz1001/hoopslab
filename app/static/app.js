@@ -397,13 +397,23 @@ async function vPlayer(pid, params) {
   drawGames("pts");
   document.getElementById("gstat").onchange = e => drawGames(e.target.value);
 
-  // percentiles
-  const pct = d.percentiles || {};
-  document.getElementById("pct").innerHTML = d.radar.map(k => {
-    const v = pct[k];
-    return `<div class="pbar"><span>${esc(pstat(k).label)}</span><div class="track"><div class="fill" style="width:${v ?? 0}%"></div></div>
-      <span class="n">${v ?? "–"}</span></div>`;
-  }).join("") + `<p class="note">Percentile rank among qualified players that season. USG% and 3PA rate describe role, not quality.</p>`;
+  // percentiles and similar players arrive in a second request so the page shows up first
+  document.getElementById("pct").innerHTML = `<div class="loading">Loading…</div>`;
+  document.getElementById("sim").innerHTML = `<div class="loading">Loading…</div>`;
+  api(`player/${pid}/extras?${qs({ season: d.season })}`).then(x => {
+    const pct = x.percentiles || {};
+    document.getElementById("pct").innerHTML = d.radar.map(k => {
+      const v = pct[k];
+      return `<div class="pbar"><span>${esc(pstat(k).label)}</span><div class="track"><div class="fill" style="width:${v ?? 0}%"></div></div>
+        <span class="n">${v ?? "–"}</span></div>`;
+    }).join("") + `<p class="note">Percentile rank among qualified players that season. USG% and 3PA rate describe role, not quality.</p>`;
+    table(document.getElementById("sim"), x.similar, [
+      { key: "player_name", label: "Player", cls: "l", render: r => playerLink(r.player_id, r.player_name, r.season) },
+      { key: "season", label: "Season", cls: "l" }, { key: "pts_pg", label: "PTS", fmt: "1" },
+      { key: "reb_pg", label: "REB", fmt: "1" }, { key: "ast_pg", label: "AST", fmt: "1" },
+      { key: "ts_pct", label: "TS%", fmt: "p" }, { key: "similarity", label: "Match", fmt: "i" },
+    ], { short: true });
+  });
 
   // career arc
   const drawArc = k => {
@@ -426,12 +436,6 @@ async function vPlayer(pid, params) {
         scales: { x: { ...baseOptions().scales.x, beginAtZero: true }, y: { ...baseOptions().scales.y, ticks: { color: css("--ink-2") } } } }) });
     document.getElementById("zt").innerHTML = `<p class="note">FG% by zone: ${ZONES.map(([z, l]) => `${l} ${fmt(cur[z + "_fg_pct"], "p")}%`).join(" · ")}</p>`;
   }
-  table(document.getElementById("sim"), d.similar, [
-    { key: "player_name", label: "Player", cls: "l", render: r => playerLink(r.player_id, r.player_name, r.season) },
-    { key: "season", label: "Season", cls: "l" }, { key: "pts_pg", label: "PTS", fmt: "1" },
-    { key: "reb_pg", label: "REB", fmt: "1" }, { key: "ast_pg", label: "AST", fmt: "1" },
-    { key: "ts_pct", label: "TS%", fmt: "p" }, { key: "similarity", label: "Match", fmt: "i" },
-  ], { short: true });
 
   const seasonCols = p => [
     { key: "season", label: "Season", cls: "l", render: r => `<a href="#/player/${pid}?season=${r.season}">${r.season}</a>` },

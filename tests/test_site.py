@@ -44,6 +44,9 @@ class ApiTests(unittest.TestCase):
         d = self.get(f"/api/player/{p['player_id']}")
         self.assertTrue(d["seasons"])
         self.assertTrue(d["games"])
+        x = self.get(f"/api/player/{p['player_id']}/extras?season={self.season}")
+        self.assertTrue(x["similar"])
+        self.assertIsNotNone(x["percentiles"])
         t = self.get(f"/api/teams?season={self.season}")["rows"][0]
         self.assertTrue(self.get(f"/api/team/{t['team_id']}?season={self.season}")["roster"])
 

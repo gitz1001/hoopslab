@@ -86,6 +86,39 @@ def ok(obj):
     return jsonify(clean(obj))
 
 
+# ------------------------------------------------------------------ precomputed results
+# `python -m nbastats export` stores the heavy analysis results (records, similar players,
+# clusters, aging curves, ...) in a `precomputed` table, so a small server (Render free: 0.1 CPU,
+# 512 MB) answers them with one indexed read. Without that table everything is computed live.
+
+_HAS_PC = None
+
+
+def precomputed(key):
+    global _HAS_PC
+    if _HAS_PC is None:
+        _HAS_PC = _has("precomputed")
+    if not _HAS_PC:
+        return None
+    con = db.connect()
+    try:
+        row = con.execute("SELECT json FROM precomputed WHERE key = ?", (key,)).fetchone()
+    finally:
+        con.close()
+    return None if row is None else json.loads(row[0])
+
+
+def cached(key, fn, missing=None):
+    """Precomputed value for key, else compute it. With `missing` set, a precomputed table
+    that lacks the key means "precompute covered everything and this one has no result"."""
+    v = precomputed(key)
+    if v is not None:
+        return v
+    if missing is not None and _HAS_PC:
+        return missing
+    return clean(fn())
+
+
 def arg_season():
     s = request.args.get("season")
     if s:
@@ -209,11 +242,18 @@ def player(pid):
             bref_hist = db.read_sql(con, f"SELECT {cols} FROM bref_history WHERE bref_name=? ORDER BY season",
                                     (bio["name"].iloc[0],))
     con.close()
-    pct = analysis.percentiles(pid, season) if season else None
-    sim = analysis.similar(pid, season) if season else []
     return ok({"bio": bio, "seasons": seasons, "playoffs": po, "season": season,
-               "games": games, "career": career, "percentiles": pct, "radar": analysis.RADAR,
-               "similar": sim, "history": bref_hist})
+               "games": games, "career": career, "radar": analysis.RADAR, "history": bref_hist})
+
+
+@app.get("/api/player/<int:pid>/extras")
+def player_extras(pid):
+    """Percentiles and similar players, loaded after the main player page has rendered."""
+    season = request.args.get("season")
+    if not season:
+        return ok({"percentiles": None, "similar": []})
+    sim = cached(f"similar:{pid}:{season}", lambda: analysis.similar(pid, season), missing=[])
+    return ok({"percentiles": analysis.percentiles(pid, season), "similar": sim})
 
 
 # ------------------------------------------------------------------ teams
@@ -285,8 +325,9 @@ GAME_RECORD_STATS = {"pts": "Points", "reb": "Rebounds", "ast": "Assists", "stl"
 
 @app.get("/api/records")
 def records():
-    return ok(_records(request.args.get("season", "all"),
-                       request.args.get("season_type", "Regular Season")))
+    season = request.args.get("season", "all")
+    stype = request.args.get("season_type", "Regular Season")
+    return ok(cached(f"records:{season}:{stype}", lambda: _records(season, stype)))
 
 
 @lru_cache(maxsize=64)
@@ -356,12 +397,15 @@ def league():
 
 @app.get("/api/analysis/clusters")
 def a_clusters():
-    return ok(analysis.clusters(arg_season(), int(request.args.get("k", 8))))
+    season, k = arg_season(), int(request.args.get("k", 8))
+    return ok(cached(f"clusters:{season}:{k}", lambda: analysis.clusters(season, k)))
 
 
 @app.get("/api/analysis/projections")
 def a_projections():
-    return ok({"base_season": arg_season(), "rows": analysis.projections(arg_season())})
+    season = arg_season()
+    return ok({"base_season": season,
+               "rows": cached(f"projections:{season}", lambda: analysis.projections(season))})
 
 
 @app.get("/api/analysis/compare")
@@ -377,7 +421,7 @@ def a_compare():
 @app.get("/api/analysis/aging")
 def a_aging():
     stat = safe_col(request.args.get("stat", "bpm"), PLAYER_STATS)
-    return ok({"stat": stat, "rows": analysis.aging_curve(stat)})
+    return ok({"stat": stat, "rows": cached(f"aging:{stat}", lambda: analysis.aging_curve(stat))})
 
 
 @app.get("/api/analysis/scatter")
@@ -401,7 +445,7 @@ def a_scatter():
 
 @app.get("/api/analysis/winmodel")
 def a_winmodel():
-    return ok(analysis.win_model())
+    return ok(cached("winmodel", analysis.win_model))
 
 
 @app.get("/api/analysis/team_trend")
@@ -413,11 +457,15 @@ def a_team_trend():
 
 @app.get("/api/analysis/draft")
 def a_draft():
+    return ok(cached("draft", _draft))
+
+
+def _draft():
     """Career value by draft slot, for drafts whose careers fall inside the stored seasons."""
     con = db.connect()
     if not db.table_exists(con, "draft_history"):
         con.close()
-        return ok({"picks": [], "classes": [], "steals": [], "draft": []})
+        return {"picks": [], "classes": [], "steals": [], "draft": []}
     last = int(db.read_sql(con, "SELECT max(season) s FROM player_season_full")["s"].iloc[0][:4])
     first = int(db.read_sql(con, "SELECT min(season) s FROM player_season_full")["s"].iloc[0][:4])
     df = db.read_sql(con, """
@@ -445,8 +493,8 @@ def a_draft():
                .reset_index())
     steals = (df[df.overall_pick >= 15].sort_values("ws", ascending=False).head(15)
               [["player_id", "player_name", "draft_year", "overall_pick", "team_abbreviation", "ws"]])
-    return ok({"picks": picks, "classes": classes, "steals": steals, "draft": df,
-               "mature_through": mature_through})
+    return {"picks": picks, "classes": classes, "steals": steals, "draft": df,
+            "mature_through": mature_through}
 
 
 @app.get("/api/analysis/origins")
@@ -498,11 +546,16 @@ def a_impact():
            (season, min_min))
     coefs = q("SELECT * FROM box_model_coefs") if _has("box_model_coefs") else pd.DataFrame()
     has_rapm = bool(df["rapm"].notna().any()) if "rapm" in df else False
+    corr = cached("impact_corr", _impact_corr)
+    return ok({"season": season, "rows": df, "coefs": coefs, "has_rapm": has_rapm, "corr": corr})
+
+
+def _impact_corr():
     corr = {}
     for k in ("bpm", "per", "ws_per_48", "net_diff", "pie"):
         t = q(f"SELECT impact, {k} v FROM player_season_full WHERE min >= 1000")
         corr[k] = float(t["impact"].corr(t["v"])) if len(t) > 10 else None
-    return ok({"season": season, "rows": df, "coefs": coefs, "has_rapm": has_rapm, "corr": corr})
+    return corr
 
 
 def _has(table):
@@ -579,6 +632,10 @@ def a_predict():
 
 @app.get("/api/analysis/situational")
 def a_situational():
+    return ok(cached("situational", _situational))
+
+
+def _situational():
     home = q("""SELECT season, avg(home_pts > away_pts) home_wpct, avg(home_pts - away_pts) home_margin
                 FROM game_elo WHERE season_type='Regular Season' GROUP BY season ORDER BY season""")
     rest = q("""SELECT CASE WHEN rest >= 3 THEN 3 ELSE rest END r, count(*) n,
@@ -591,7 +648,7 @@ def a_situational():
                    GROUP BY r, o""")
     b2b = q("""SELECT season, avg(rest = 0) b2b_share FROM team_rest WHERE rest IS NOT NULL
                GROUP BY season ORDER BY season""")
-    return ok({"home": home, "rest": rest, "matchup": matchup, "b2b": b2b})
+    return {"home": home, "rest": rest, "matchup": matchup, "b2b": b2b}
 
 
 STICKY = ["pts_p100", "ast_pct", "reb_pct", "oreb_pct", "dreb_pct", "stl_p100", "blk_p100",
@@ -621,7 +678,8 @@ def _stickiness(min_min):
 
 @app.get("/api/analysis/stickiness")
 def a_stickiness():
-    return ok({"rows": _stickiness(int(request.args.get("min_min", 1000)))})
+    m = int(request.args.get("min_min", 1000))
+    return ok({"rows": cached(f"stickiness:{m}", lambda: _stickiness(m))})
 
 
 @app.get("/api/analysis/lineups")

@@ -55,6 +55,12 @@ def run(out: str | None = None, gz: bool = False):
                     [v for _ in RECORD_STATS for v in (season, stype)])
     skip = {(t, c) for t, c in db.INDEXES if t == "player_game" and c.startswith("season_type,")}
     db.ensure_indexes(con, skip=skip)
+    con.commit()
+    con.close()
+    # heavy analysis results, computed once here instead of on every request
+    from app.precompute import build as precompute
+    precompute(tmp)
+    con = sqlite3.connect(tmp)
     con.execute("ANALYZE")
     con.commit()
     con.execute("VACUUM")

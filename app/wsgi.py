@@ -12,7 +12,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 
 def _warm():
-    """Precompute the slowest page (all-time records) so the first visitor doesn't wait."""
+    """Precompute the slowest page (all-time records) so the first visitor doesn't wait.
+    Skipped when the database already carries precomputed results."""
+    from .server import precomputed
+    if precomputed("records:all:Regular Season") is not None:
+        return
     try:
         for stype in ("Regular Season", "Playoffs"):
             _records("all", stype)

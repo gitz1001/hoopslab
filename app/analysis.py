@@ -9,9 +9,8 @@ import pandas as pd
 os.environ.setdefault("LOKY_MAX_CPU_COUNT", str(os.cpu_count() or 4))
 # joblib cannot count physical cores on some Windows setups and warns on every fit
 warnings.filterwarnings("ignore", message="Could not find the number of physical cores")
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
-from sklearn.linear_model import LinearRegression
+# scikit-learn is imported inside the functions that need it: on a small server most requests
+# are answered from precomputed results, so skipping the import saves memory and cold-start time.
 
 from nbastats import db
 
@@ -65,7 +64,9 @@ def qualified(df, min_minutes=500):
 
 @lru_cache(maxsize=32)
 def clusters(season: str, k: int = 8, min_minutes: int = 800):
-    df = qualified(all_player_seasons().query("season == @season"), min_minutes)
+    from sklearn.cluster import KMeans
+    from sklearn.decomposition import PCA
+    df = qualified(season_frame(season), min_minutes)
     df = df.dropna(subset=PROFILE)
     if len(df) < k * 3:
         return {"players": [], "clusters": []}
@@ -122,11 +123,48 @@ def similar(player_id: int, season: str, n: int = 10, min_minutes: int = 800):
                "reb_pg", "ast_pg", "ts_pct", "bpm", "similarity"]].round(3).to_dict("records")
 
 
+def similar_all(n: int = 10, min_minutes: int = 800) -> dict:
+    """similar() for every qualified player-season at once (used to precompute results)."""
+    df = qualified(all_player_seasons(), min_minutes).dropna(subset=PROFILE).reset_index(drop=True)
+    z = _zscore_within_season(df, PROFILE).fillna(0).to_numpy()
+    pid = df["player_id"].to_numpy()
+    out_cols = ["player_id", "player_name", "season", "team_abbreviation", "age", "pts_pg",
+                "reb_pg", "ast_pg", "ts_pct", "bpm"]
+    recs = df[out_cols].round(3).replace({np.nan: None}).to_dict("records")
+    result = {}
+    for c0 in range(0, len(df), 400):
+        block = z[c0:c0 + 400]
+        d = np.sqrt(((block[:, None, :] - z[None, :, :]) ** 2).sum(-1))
+        order = np.argsort(d, axis=1)[:, :80]
+        for i, row in enumerate(order):
+            me = c0 + i
+            seen, picks = {pid[me]}, []
+            for j in row:
+                if pid[j] in seen:
+                    continue
+                seen.add(pid[j])
+                picks.append({**recs[j], "similarity": float(round(100 * np.exp(-d[i, j] / 4)))})
+                if len(picks) == n:
+                    break
+            result[(int(pid[me]), df.at[me, "season"])] = picks
+    return result
+
+
 # ------------------------------------------------------------------ percentiles / compare
 
-def percentiles(player_id: int, season: str, cols=RADAR, min_minutes=500):
-    df = qualified(all_player_seasons().query("season == @season"), min_minutes)
-    row = all_player_seasons().query("player_id == @player_id and season == @season")
+def season_frame(season: str) -> pd.DataFrame:
+    """One season from the database (cheap), instead of the whole multi-season table."""
+    con = _con()
+    try:
+        return db.read_sql(con, "SELECT * FROM player_season_full WHERE season = ?", (season,))
+    finally:
+        con.close()
+
+
+def percentiles(player_id: int, season: str, cols=RADAR, min_minutes=500, frame=None):
+    frame = season_frame(season) if frame is None else frame
+    df = qualified(frame, min_minutes)
+    row = frame[frame.player_id == player_id]
     if row.empty:
         return None
     out = {}
@@ -139,13 +177,15 @@ def percentiles(player_id: int, season: str, cols=RADAR, min_minutes=500):
 
 def compare(pairs):
     rows = []
-    allp = all_player_seasons()
+    frames = {}
     for pid, season in pairs:
-        r = allp[(allp.player_id == pid) & (allp.season == season)]
+        frames.setdefault(season, season_frame(season))
+        f = frames[season]
+        r = f[f.player_id == pid]
         if r.empty:
             continue
         rec = r.iloc[0].replace({np.nan: None}).to_dict()
-        rec["percentiles"] = percentiles(pid, season)
+        rec["percentiles"] = percentiles(pid, season, frame=f)
         rows.append(rec)
     return {"players": rows, "radar": RADAR}
 
@@ -255,6 +295,8 @@ FOUR_FACTORS = ["efg_pct", "tm_tov_pct", "oreb_pct", "fta_rate",
 
 
 def win_model():
+    from sklearn.linear_model import LinearRegression
+
     """Regress team win% on the four factors (offense and defense) across every stored
     team-season, on standardized inputs so the coefficients are comparable."""
     con = _con()
