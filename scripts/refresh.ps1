@@ -6,5 +6,8 @@ Set-Location (Split-Path $PSScriptRoot -Parent)
 $env:PYTHONIOENCODING = "utf-8"
 python -m nbastats update          # current season (fresh fetch while in progress) + models
 python -m nbastats predict         # rest-of-season or next-season forecast
-python -m nbastats export          # data/nba_serve.db for the website
-Write-Host "Refreshed. Redeploy (docker compose up -d --build) or copy data/nba_serve.db to the server."
+python -m nbastats export --gz     # data/nba_serve.db (+ .gz for Render)
+git add data/nba_serve.db.gz
+git commit -m "Data refresh $(Get-Date -Format yyyy-MM-dd)"
+git push                           # Render redeploys automatically
+Write-Host "Refreshed and pushed. Render is redeploying."

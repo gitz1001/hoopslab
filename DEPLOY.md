@@ -32,7 +32,7 @@ pip install -r requirements.txt
 python -m nbastats update --from 1996-97      # first time: all seasons (~40 min, cached after)
 python -m nbastats history                    # 1979-80 to 1995-96 (Basketball Reference)
 python -m nbastats predict                    # next-season / rest-of-season forecast
-python -m nbastats export                     # -> data/nba_serve.db
+python -m nbastats export --gz                # -> data/nba_serve.db (+ .gz for Render)
 python -m unittest discover -s tests          # smoke tests against the database
 ```
 
@@ -68,12 +68,29 @@ fly deploy                  # builds the Dockerfile, including data/nba_serve.db
 
 `fly.toml` sets a `/healthz` check, HTTPS, 1 GB RAM and scale-to-zero. Redeploy after each refresh.
 
-### Option C: Render
+### Option C: Render (set up for this repo)
 
-`render.yaml` is a Blueprint for a Docker web service with a health check. Render builds from a
-Git repo, so the 240 MB database must be in it: track it with Git LFS
-(`git lfs track data/nba_serve.db`) or build the image yourself and point Render at a registry
-image instead.
+The repo carries the served database gzipped (≈60 MB) through **Git LFS** at
+`data/nba_serve.db.gz`. Render pulls LFS files when it clones, the Docker build unpacks it
+and checks it is a real SQLite file (the build fails with a clear message if it only got an
+LFS pointer).
+
+First deploy:
+
+1. Render dashboard → **New → Blueprint** → connect GitHub and pick `gitz1001/hoopslab`.
+2. Render reads `render.yaml`: one Docker web service on the **free** plan, health check
+   `/healthz`, auto-deploy on every push to `main`. Click **Apply**.
+3. The first build takes a few minutes; the site then lives at `https://hoopslab.onrender.com`
+   (or the name Render assigns). Free instances sleep after 15 idle minutes and take about a
+   minute to wake; switch `plan: starter` in `render.yaml` (and `WEB_WORKERS` to 2) to keep it awake.
+
+Refreshing data: run `scripts/refresh.ps1` (or `.sh`). It updates, predicts, exports
+`--gz`, commits `data/nba_serve.db.gz` and pushes; Render redeploys automatically.
+
+**Git LFS quota:** GitHub's free LFS allowance is 1 GB of storage and 1 GB of download
+bandwidth per month. Each refresh stores a new ≈60 MB version, and each Render build downloads
+one, so budget roughly a dozen refreshes a month on the free allowance (buy a data pack or
+prune old LFS versions if you need more).
 
 ### Option D: Windows without Docker
 
@@ -98,7 +115,7 @@ See `.env.example`.
 
 ## Production behaviour already built in
 
-- Gunicorn (Linux) or waitress (Windows) instead of the Flask dev server; `--preload`, 120 s timeout.
+- Gunicorn (Linux) or waitress (Windows) instead of the Flask dev server, 120 s timeout.
 - gzip for JSON/HTML/CSS responses (the players table drops from ~900 KB to ~120 KB).
 - `Cache-Control` on API and static files; data only changes when you redeploy.
 - Security headers: Content-Security-Policy (only jsdelivr for Chart.js), nosniff, frame and referrer policies.

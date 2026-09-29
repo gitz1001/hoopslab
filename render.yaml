@@ -1,13 +1,18 @@
-# Render Blueprint (https://render.com/docs/blueprint-spec). Push the repo including
-# data/nba_serve.db via Git LFS, or switch to a prebuilt image from a registry.
+# Render Blueprint: Dashboard -> New -> Blueprint -> pick this repo.
+# The database ships in the repo as data/nba_serve.db.gz via Git LFS; Render pulls LFS files
+# when it clones, and the Docker build unpacks and verifies it.
 services:
   - type: web
     name: hoopslab
     runtime: docker
-    plan: starter
+    # free: 512 MB RAM, sleeps after 15 idle minutes (first visit then takes ~1 min).
+    # starter ($7/mo) stays awake; raise WEB_WORKERS to 2 there.
+    plan: free
+    branch: main
+    autoDeploy: true
     healthCheckPath: /healthz
     envVars:
       - key: WEB_WORKERS
-        value: "2"
+        value: "1"
       - key: NBA_API_CACHE_SECONDS
         value: "600"

@@ -2,6 +2,7 @@
 *
 !nbastats/
 !app/
+!scripts/unpack_db.py
 !requirements-serve.txt
-!data/nba_serve.db
+!data/nba_serve.db.gz
 **/__pycache__

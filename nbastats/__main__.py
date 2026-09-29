@@ -6,7 +6,7 @@
     python -m nbastats history --from 1979-80 --to 1995-96   # Basketball Reference only
     python -m nbastats models --lineups            # Elo, SRS, RAPM, impact, WAR
     python -m nbastats predict --sims 10000        # next-season projections and simulation
-    python -m nbastats export                      # slim read-only database for the website
+    python -m nbastats export --gz                 # slim read-only database (+ .gz for deploys)
 """
 import argparse
 
@@ -36,6 +36,7 @@ def main():
 
     ex = sub.add_parser("export", help="write a slim, read-only copy of the database for serving")
     ex.add_argument("--out", help="output path (default data/nba_serve.db)")
+    ex.add_argument("--gz", action="store_true", help="also write a gzipped copy for Git LFS / Render")
 
     mo = sub.add_parser("models", help="rebuild Elo, SRS, RAPM, impact, WAR (no fetching "
                                        "except lineups missing from the cache)")
@@ -72,7 +73,7 @@ def main():
         predict.run(a.season, a.sims)
     elif a.cmd == "export":
         from . import export
-        export.run(a.out)
+        export.run(a.out, gz=a.gz)
     elif a.cmd == "reference":
         con = db.connect()
         build.update_reference(con)

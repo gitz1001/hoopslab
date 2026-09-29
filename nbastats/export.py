@@ -25,7 +25,7 @@ RECORD_STATS = ["pts", "reb", "ast", "stl", "blk", "fg3m", "ftm", "game_score", 
 FILTERS = {"lineups": "min >= 50"}
 
 
-def run(out: str | None = None):
+def run(out: str | None = None, gz: bool = False):
     out = Path(out) if out else SERVE_DB_PATH
     tmp = out.with_suffix(".tmp")
     tmp.unlink(missing_ok=True)
@@ -63,3 +63,17 @@ def run(out: str | None = None):
     tmp.rename(out)
     mb = out.stat().st_size / 1e6
     print(f"[{time.strftime('%H:%M:%S')}] wrote {out} ({mb:.0f} MB, {len(SERVED_TABLES)} tables)")
+    if gz:
+        compress(out)
+
+
+def compress(path: Path) -> Path:
+    """Gzip the served database (~240 MB -> ~60 MB) for Git LFS / Render deploys.
+    The Docker build unpacks it again (scripts/unpack_db.py)."""
+    import gzip
+    import shutil
+    target = path.with_name(path.name + ".gz")
+    with open(path, "rb") as f, gzip.open(target, "wb", compresslevel=9) as g:
+        shutil.copyfileobj(f, g, 1 << 20)
+    print(f"[{time.strftime('%H:%M:%S')}] wrote {target} ({target.stat().st_size / 1e6:.0f} MB)")
+    return target

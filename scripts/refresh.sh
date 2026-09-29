@@ -6,5 +6,8 @@ cd "$(dirname "$0")/.."
 export PYTHONIOENCODING=utf-8
 python -m nbastats update
 python -m nbastats predict
-python -m nbastats export
-echo "Refreshed. Redeploy or copy data/nba_serve.db to the server."
+python -m nbastats export --gz
+git add data/nba_serve.db.gz
+git commit -m "Data refresh $(date +%F)"
+git push   # Render redeploys automatically
+echo "Refreshed and pushed. Render is redeploying."

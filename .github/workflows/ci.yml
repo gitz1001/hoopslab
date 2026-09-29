@@ -15,7 +15,7 @@ jobs:
         run: node --check app/static/app.js
       - name: Tests (API tests skip without a database)
         run: python -m unittest discover -s tests -v
-      - name: Docker image builds (without data)
+      - name: Docker image builds (with a placeholder database, so CI spends no LFS bandwidth)
         run: |
-          mkdir -p data && touch data/nba_serve.db
+          python -c "import sqlite3,gzip,shutil; sqlite3.connect('/tmp/p.db').execute('create table t(x)').connection.commit(); shutil.copyfileobj(open('/tmp/p.db','rb'), gzip.open('data/nba_serve.db.gz','wb'))"
           docker build -t hoopslab:ci .

@@ -17,8 +17,11 @@ RUN pip install -r requirements-serve.txt
 COPY nbastats ./nbastats
 COPY app ./app
 
-# Bake the exported database into the image (comment out to mount it as a volume instead).
-COPY data/nba_serve.db /data/nba_serve.db
+# Bake the exported database into the image. The repo carries it gzipped through Git LFS
+# (python -m nbastats export --gz); unpack_db.py checks it is real data, not an LFS pointer.
+COPY scripts/unpack_db.py /srv/scripts/unpack_db.py
+COPY data/nba_serve.db.gz /data/nba_serve.db.gz
+RUN python /srv/scripts/unpack_db.py /data/nba_serve.db.gz
 
 RUN useradd --create-home --uid 10001 hoops && chown -R hoops /srv
 USER hoops
@@ -29,4 +32,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
 
 # 2 workers x 4 threads is plenty for a small instance; each worker holds its own caches.
 CMD gunicorn app.wsgi:app --bind 0.0.0.0:${PORT} --workers ${WEB_WORKERS:-2} --threads 4 \
-    --timeout 120 --access-logfile - --preload
+    --timeout 120 --access-logfile -

@@ -4,3 +4,4 @@ Dockerfile text eol=lf
 Procfile text eol=lf
 *.yml text eol=lf
 *.toml text eol=lf
+data/nba_serve.db.gz filter=lfs diff=lfs merge=lfs -text

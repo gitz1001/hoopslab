@@ -1,4 +1,5 @@
-data/
+data/*
+!data/nba_serve.db.gz
 __pycache__/
 *.pyc
 .venv/
