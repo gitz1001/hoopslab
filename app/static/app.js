@@ -696,7 +696,8 @@ const ANALYSES = {
   shooting: ["Shot quality", "Shot-making vs expected eFG from shot locations, and points added by efficient scoring.", "Player value"],
   reliability: ["Signal vs noise", "Which stats carry over from season to season, and who is most consistent night to night.", "Player value"],
   power: ["Power ratings", "Elo for every game since 1996, SRS and strength of schedule, with model calibration.", "Teams and games"],
-  predict: ["Game predictor", "Win probability, point spread and best-of-7 series odds for any matchup.", "Teams and games"],
+  predict: ["Game predictor", "Win probability, spread, predicted score and the reasons why, with rest and injuries.", "Teams and games"],
+  builder: ["Lineup builder", "Pick any five, get a predicted net rating and fit warnings, or let the optimizer find the best unit.", "Teams and games"],
   lineups: ["Lineups", "Every five-man unit with 100+ minutes: best and worst net ratings.", "Teams and games"],
   situational: ["Rest and home court", "Back-to-backs, rest advantage, and how home court has shrunk.", "Teams and games"],
   compare: ["Compare players", "Side by side stats and percentile profiles for up to four player-seasons."],
@@ -720,7 +721,7 @@ async function vAnalysis(sub, params) {
   }
   const nav = `<div class="toolbar">${Object.entries(ANALYSES).map(([k, [t]]) => `<a href="#/analysis/${k}"><button class="${k === sub ? "primary" : ""}">${t}</button></a>`).join("")}</div>`;
   const fn = { compare: aCompare, explorer: aExplorer, archetypes: aArchetypes, projections: aProjections, aging: aAging, wins: aWins, draft: aDraft, origins: aOrigins,
-    impact: aImpact, shooting: aShooting, reliability: aReliability, power: aPower, predict: aPredict, lineups: aLineups, situational: aSituational }[sub];
+    impact: aImpact, shooting: aShooting, reliability: aReliability, power: aPower, predict: aPredict, builder: aBuilder, lineups: aLineups, situational: aSituational }[sub];
   if (fn) await fn(nav, params);
 }
 
@@ -1063,28 +1064,89 @@ async function aPredict(nav, params) {
   const teams = [...t.rows].sort((a, b) => a.team_name.localeCompare(b.team_name));
   const byElo = [...t.rows].sort((a, b) => (b.elo_end || 0) - (a.elo_end || 0));
   const home = params.get("home") || byElo[0]?.team_id, away = params.get("away") || byElo[1]?.team_id;
+  const hr = params.get("home_rest") ?? "1", ar = params.get("away_rest") ?? "1";
+  const out = new Set((params.get("out") || "").split(",").filter(Boolean).map(Number));
   const opts = sel => teams.map(x => `<option value="${x.team_id}" ${x.team_id == sel ? "selected" : ""}>${esc(x.team_name)}</option>`).join("");
-  setView(`${nav}<h1>Game predictor</h1><p class="sub">Uses each team's end-of-${esc(S.season)} ratings. Elo gives a win probability directly; SRS gives a point spread, turned into a probability assuming game margins vary with a standard deviation of 12.5 points. Series odds assume the home team has home court in a 2-2-1-1-1 best-of-7.</p>
-    <div class="toolbar"><label>Home <select id="ph">${opts(home)}</select></label><label>Away <select id="pa">${opts(away)}</select></label></div>
+  const restOpts = sel => [["0", "Back-to-back"], ["1", "1 day"], ["2", "2 days"], ["3", "3+ days"]].map(([v, l]) => `<option value="${v}" ${v == sel ? "selected" : ""}>${l}</option>`).join("");
+  setView(`${nav}<h1>Game predictor</h1><p class="sub">Blends Elo and SRS into one point spread, then adjusts for rest (measured from every stored game) and for players you rule out (their impact over a replacement-level fill-in, times their minutes). Win probability assumes game margins vary around the spread with an SD of 12.5 points.</p>
+    <div class="toolbar"><label>Home <select id="ph">${opts(home)}</select></label><label>Rest <select id="phr">${restOpts(hr)}</select></label>
+      <label>Away <select id="pa">${opts(away)}</select></label><label>Rest <select id="par">${restOpts(ar)}</select></label></div>
     <div id="pr"></div>`);
-  const go = () => location.hash = `#/analysis/predict?home=${document.getElementById("ph").value}&away=${document.getElementById("pa").value}`;
-  document.getElementById("ph").onchange = go; document.getElementById("pa").onchange = go;
-  if (home == away) { document.getElementById("pr").innerHTML = `<div class="empty">Pick two different teams.</div>`; return; }
-  const d = await api(`analysis/predict?season=${S.season}&home=${home}&away=${away}`);
-  if (d.error) { document.getElementById("pr").innerHTML = `<div class="empty">${esc(d.error)}</div>`; return; }
+  const go = () => {
+    const v = id => document.getElementById(id).value;
+    const keep = v("ph") == home && v("pa") == away ? [...out].join(",") : "";
+    location.hash = `#/analysis/predict?home=${v("ph")}&away=${v("pa")}&home_rest=${v("phr")}&away_rest=${v("par")}${keep ? "&out=" + keep : ""}`;
+  };
+  ["ph", "pa", "phr", "par"].forEach(id => document.getElementById(id).onchange = go);
+  const box = document.getElementById("pr");
+  if (home == away) { box.innerHTML = `<div class="empty">Pick two different teams.</div>`; return; }
+  const d = await api(`analysis/predict?season=${S.season}&home=${home}&away=${away}&home_rest=${hr}&away_rest=${ar}&out=${[...out].join(",")}`);
+  if (d.error) { box.innerHTML = `<div class="empty">${esc(d.error)}</div>`; return; }
+  const b = d.blend, H = d.home, A = d.away;
   const pct = v => (v * 100).toFixed(1) + "%";
-  const card = (title, p, sub) => `<div class="tile"><div class="k">${title}</div><div class="v">${pct(p)}</div><div class="d">${sub}</div></div>`;
-  document.getElementById("pr").innerHTML = `
-    <div class="grid g2"><div class="card"><h2>${esc(d.home.team_name)} vs ${esc(d.away.team_name)}</h2>
-      <p class="muted">${esc(d.home.team_abbr)} ${d.home.w}-${d.home.l}, Elo ${Math.round(d.home.elo_end)}, SRS ${fmt(d.home.srs, "2")} · ${esc(d.away.team_abbr)} ${d.away.w}-${d.away.l}, Elo ${Math.round(d.away.elo_end)}, SRS ${fmt(d.away.srs, "2")}</p>
-      <div class="tiles">${card(`${d.home.team_abbr} wins at home (Elo)`, d.elo.p_home, "single game")}${card(`${d.home.team_abbr} wins at home (SRS)`, d.srs.p_home, `spread ${d.srs.spread > 0 ? d.home.team_abbr + " −" + d.srs.spread.toFixed(1) : d.away.team_abbr + " −" + (-d.srs.spread).toFixed(1)}`)}
-      ${card(`${d.home.team_abbr} wins series (Elo)`, d.elo.series, "best of 7, with home court")}${card(`${d.home.team_abbr} wins series (SRS)`, d.srs.series, "best of 7, with home court")}</div>
-      <p class="note">Home-court edge this season: ${d.hca.toFixed(1)} points (from the SRS fit).</p></div>
-    <div class="card"><h3>Win probability</h3><div class="chart-box short"><canvas id="c-pp"></canvas></div></div></div>`;
-  chart("c-pp", { type: "bar", data: { labels: ["Game (Elo)", "Game (SRS)", "Series (Elo)", "Series (SRS)"], datasets: [
-    { label: d.home.team_abbr, data: [d.elo.p_home, d.srs.p_home, d.elo.series, d.srs.series].map(v => v * 100), backgroundColor: series(0), borderRadius: 3 },
-    { label: d.away.team_abbr, data: [d.elo.p_home, d.srs.p_home, d.elo.series, d.srs.series].map(v => 100 - v * 100), backgroundColor: series(1), borderRadius: 3 }] },
-    options: baseOptions({ indexAxis: "y", scales: { x: { ...baseOptions().scales.x, stacked: true, max: 100 }, y: { ...baseOptions().scales.y, stacked: true, ticks: { color: css("--ink-2") } } } }) });
+  const fav = b.spread >= 0 ? H.team_abbr : A.team_abbr;
+  const tile = (k, v, sub) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${sub}</div></div>`;
+  const rosterList = tid => d.roster.filter(p => p.team_id == tid).slice(0, 10).map(p =>
+    `<label style="display:flex;gap:8px;align-items:center;padding:3px 0"><input type="checkbox" data-pid="${p.player_id}" ${out.has(p.player_id) ? "checked" : ""}>
+      <span style="flex:1">${esc(p.player_name)}</span><span class="muted small">${fmt(p.min_pg, "1")} mpg · impact ${signed(p.impact)}</span></label>`).join("");
+  box.innerHTML = `
+    <div class="tiles">${tile(`${esc(H.team_abbr)} win probability`, pct(b.p_home), `${esc(A.team_abbr)} ${pct(1 - b.p_home)}`)}
+      ${tile("Spread", `${esc(fav)} −${Math.abs(b.spread).toFixed(1)}`, `Elo alone ${b.models.elo_spread.toFixed(1)} · SRS alone ${b.models.srs_spread.toFixed(1)} (home view)`)}
+      ${tile("Predicted score", `${esc(H.team_abbr)} ${Math.round(b.home_pts)} – ${Math.round(b.away_pts)} ${esc(A.team_abbr)}`, `total ${b.total.toFixed(0)} at ${b.pace.toFixed(1)} possessions`)}
+      ${tile(`${esc(H.team_abbr)} wins series`, pct(b.series), "best of 7, home court to " + esc(H.team_abbr))}</div>
+    <div class="grid g2 section"><div class="card"><h3>Why: what moves the spread (points toward ${esc(H.team_abbr)})</h3><div class="chart-box short"><canvas id="c-pf"></canvas></div>
+      <p class="note">Negative bars favor ${esc(A.team_abbr)}. Ratings are end-of-${esc(S.season)}, so for a past season this is hindsight, not a pregame forecast. The pregame Elo calibration is on the Power ratings page.</p></div>
+      <div class="card"><h3>Who's out?</h3><p class="muted small">Tick players to rule them out.</p>
+        <div class="grid g2"><div><b>${esc(H.team_abbr)}</b>${rosterList(home)}</div><div><b>${esc(A.team_abbr)}</b>${rosterList(away)}</div></div></div></div>`;
+  box.querySelectorAll("input[data-pid]").forEach(cb => cb.onchange = () => {
+    const ids = [...box.querySelectorAll("input[data-pid]:checked")].map(x => x.dataset.pid).join(",");
+    location.hash = `#/analysis/predict?home=${home}&away=${away}&home_rest=${hr}&away_rest=${ar}${ids ? "&out=" + ids : ""}`;
+  });
+  chart("c-pf", { type: "bar", data: { labels: b.factors.map(f => f.factor), datasets: [{ label: "Points", data: b.factors.map(f => f.points),
+    backgroundColor: b.factors.map(f => f.points >= 0 ? series(0) : series(1)), borderRadius: 3 }] },
+    options: baseOptions({ indexAxis: "y", plugins: { ...baseOptions().plugins, legend: { display: false } }, scales: { x: baseOptions().scales.x, y: { ...baseOptions().scales.y, ticks: { color: css("--ink-2") } } } }) });
+}
+
+async function aBuilder(nav, params) {
+  const t = await api(`teams?season=${S.season}`);
+  const teams = [...t.rows].sort((a, b) => a.team_name.localeCompare(b.team_name));
+  const team = params.get("team") || [...t.rows].sort((a, b) => (b.net_rating || 0) - (a.net_rating || 0))[0]?.team_id;
+  const obj = params.get("objective") || "net";
+  const picked = (params.get("players") || "").split(",").filter(Boolean).map(Number);
+  const objs = { net: "Best overall", offense: "Best offense", defense: "Best defense", balanced: "Best fit (penalize warnings)" };
+  setView(`${nav}<h1>Lineup builder</h1><p class="sub">Pick any five from a roster and get a predicted net rating: the sum of each player's offensive and defensive impact (points per 100 possessions vs league average). Fit warnings are rules of thumb shown next to the number, not part of it. The optimizer checks every five-man group from the top 13 players by minutes.</p>
+    <div class="toolbar"><label>Team <select id="bt">${teams.map(x => `<option value="${x.team_id}" ${x.team_id == team ? "selected" : ""}>${esc(x.team_name)}</option>`).join("")}</select></label>
+      <label>Optimize for <select id="bo">${Object.entries(objs).map(([k, v]) => `<option value="${k}" ${k == obj ? "selected" : ""}>${v}</option>`).join("")}</select></label></div>
+    <div id="bb"></div>`);
+  const nav2 = (tm, o, ps) => location.hash = `#/analysis/builder?team=${tm}&objective=${o}${ps.length ? "&players=" + ps.join(",") : ""}`;
+  document.getElementById("bt").onchange = e => nav2(e.target.value, obj, []);
+  document.getElementById("bo").onchange = e => nav2(team, e.target.value, picked);
+  const [d, bt] = await Promise.all([api(`analysis/lineup_builder?season=${S.season}&team=${team}&objective=${obj}&players=${picked.join(",")}`), api("analysis/lineup_backtest")]);
+  const box = document.getElementById("bb");
+  if (d.pool.length < 5) { box.innerHTML = `<div class="empty">Not enough players with 200+ minutes (or no impact data) for this team and season.</div>`; return; }
+  const name = Object.fromEntries(d.pool.map(p => [p.player_id, p.player_name]));
+  const flags = fl => fl.length ? fl.map(f => `<div class="small ${f.level === "good" ? "up" : "down"}">${f.level === "good" ? "✓" : "!"} ${esc(f.text)}</div>`).join("") : `<div class="small up">✓ No fit warnings</div>`;
+  const actual = a => a ? `Actually played ${Math.round(a.min)} min together, net ${signed(a.net_rating)}` : "Never played 50+ minutes together this season";
+  const ratingCard = (title, r, ids) => `<div class="card"><h3>${title}</h3><p>${ids.map(i => esc(name[i])).join(" · ")}</p>
+    <div class="tiles">${[["Predicted net", r.net], ["Offense", r.o], ["Defense", r.d]].map(([k, v]) => `<div class="tile"><div class="k">${k}</div><div class="v">${signed(v)}</div></div>`).join("")}</div>
+    ${flags(r.flags)}<p class="note">${actual(r.actual)}</p>
+    ${ids !== picked ? `<button data-use="${ids.join(",")}">Load into builder</button>` : ""}</div>`;
+  const tr = bt.r == null ? "" : `<div class="card section"><h3>How much should you trust this?</h3>
+    <p>Tested out of sample: predict every lineup with 200+ minutes from its players' <b>previous-season</b> impact, then compare with what it actually did (${bt.n.toLocaleString()} lineups). Correlation <b>${bt.r.toFixed(2)}</b>; typical error ${bt.rmse.toFixed(1)} points per 100 vs ${bt.rmse_zero.toFixed(1)} for guessing "average" every time. Slope ${bt.slope.toFixed(2)}: ${bt.slope < 1 ? "real results spread less than predictions, so treat big numbers with caution" : "predictions are, if anything, too cautious"}.
+    Lineup results themselves are noisy: even 200 minutes is only ~400 possessions.</p><div class="chart-box short"><canvas id="c-bt"></canvas></div></div>`;
+  box.innerHTML = `<div class="grid g2"><div class="card"><h3>Your five (${picked.length}/5)</h3>
+      ${d.pool.map(p => `<label style="display:flex;gap:8px;align-items:center;padding:3px 0"><input type="checkbox" data-pid="${p.player_id}" ${picked.includes(p.player_id) ? "checked" : ""}>
+        <span style="flex:1">${esc(p.player_name)}</span><span class="muted small">${fmt(p.min_pg, "1")} mpg · O ${signed(p.o_impact)} D ${signed(p.d_impact)}</span></label>`).join("")}</div>
+      ${d.rating ? ratingCard("Your lineup", d.rating, picked) : `<div class="card"><div class="empty">Tick exactly five players to rate a lineup.</div></div>`}</div>
+    <h2 class="section">${esc(objs[obj])}: top five lineups</h2><div class="grid g2">${d.best.map((b, i) => ratingCard(`#${i + 1}`, b, b.players)).join("")}</div>${tr}`;
+  box.querySelectorAll("input[data-pid]").forEach(cb => cb.onchange = () => {
+    const ids = [...box.querySelectorAll("input[data-pid]:checked")].map(x => +x.dataset.pid);
+    if (ids.length <= 5) nav2(team, obj, ids); else cb.checked = false;
+  });
+  box.querySelectorAll("button[data-use]").forEach(btn => btn.onclick = () => nav2(team, obj, btn.dataset.use.split(",")));
+  if (bt.bins) chart("c-bt", { type: "line", data: { labels: bt.bins.map(x => x.pred.toFixed(1)), datasets: [
+    lineDs("Actual net rating", bt.bins.map(x => x.actual), 0), lineDs("Perfect", bt.bins.map(x => x.pred), 1, { borderDash: [4, 4] })] },
+    options: baseOptions({ scales: { x: { ...baseOptions().scales.x, title: { display: true, text: "Predicted net (previous-season impact)", color: css("--muted") } }, y: baseOptions().scales.y } }) });
 }
 
 async function aLineups(nav, params) {

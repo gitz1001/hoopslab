@@ -10,7 +10,7 @@ import time
 
 from . import analysis
 from .catalog import PLAYER_STATS
-from .server import (_draft, _impact_corr, _records, _situational, _stickiness, clean, q)
+from .server import (_draft, _impact_corr, _records, _situational, _stickiness, _lineup_backtest, clean, q)
 
 # counting stats have no meaningful aging curve (the UI hides them too)
 NO_AGING = {"gp", "min", "dd2", "td3", "pts", "reb", "ast", "stl", "blk", "fg3m", "ftm"}
@@ -37,6 +37,7 @@ def build(out_path):
     put("draft", _draft())
     put("situational", _situational())
     put("impact_corr", _impact_corr())
+    put("lineup_backtest", _lineup_backtest())
     log("aging curves")
     for stat in PLAYER_STATS:
         if stat not in NO_AGING:

@@ -1,6 +1,7 @@
 """Flask JSON API + static single-page site.  Run: python -m app  (http://127.0.0.1:8050)"""
 import gzip
 import json
+from statistics import NormalDist
 import logging
 import math
 import os
@@ -607,27 +608,36 @@ def _series_prob(p_home, p_road):
 
 @app.get("/api/analysis/predict")
 def a_predict():
-    from statistics import NormalDist
+    from nbastats import matchup
     season = arg_season()
     home, away = int(request.args["home"]), int(request.args["away"])
-    t = q("""SELECT team_id, team_abbr, team_name, elo_end, srs, net_rating, w, l
-             FROM team_season_full WHERE season=? AND team_id IN (?, ?)""", (season, home, away))
-    if len(t) < 2:
-        return ok({"error": "both teams need a stored season"})
+    t = q("""SELECT team_id, team_abbr, team_name, elo_end, srs, net_rating, off_rating, def_rating,
+                    pace, w, l FROM team_season_full WHERE season=? AND team_id IN (?, ?)""",
+          (season, home, away))
+    if len(t) < 2 or t[["elo_end", "srs", "off_rating", "def_rating", "pace"]].isna().any().any():
+        return ok({"error": "both teams need a stored season with ratings"})
     t = t.set_index("team_id")
     hca = q("SELECT avg(hca) h FROM team_srs WHERE season=?", (season,))["h"].iloc[0] or 2.5
-    elo_diff = t.loc[home, "elo_end"] - t.loc[away, "elo_end"]
-    p_elo_home = 1 / (1 + 10 ** (-(elo_diff + 100) / 400))
-    p_elo_road = 1 / (1 + 10 ** (-(elo_diff - 100) / 400))
-    spread = t.loc[home, "srs"] - t.loc[away, "srs"] + hca
-    nd = NormalDist(0, 12.5)  # NBA game margins vary around the spread with SD ~12.5
-    p_srs_home = nd.cdf(spread)
-    p_srs_road = nd.cdf(spread - 2 * hca)
-    return ok({
-        "home": t.loc[home].to_dict(), "away": t.loc[away].to_dict(), "hca": hca,
-        "elo": {"p_home": p_elo_home, "series": _series_prob(p_elo_home, p_elo_road)},
-        "srs": {"spread": spread, "p_home": p_srs_home, "series": _series_prob(p_srs_home, p_srs_road)},
-    })
+    lg = q("SELECT avg(off_rating) o FROM team_season_full WHERE season=?", (season,))["o"].iloc[0]
+    out = {int(x) for x in request.args.get("out", "").split(",") if x.strip().isdigit()}
+    roster = q("""SELECT player_id, player_name, team_id, gp, min_pg, impact, o_impact, d_impact
+                  FROM player_season_full WHERE season=? AND team_id IN (?, ?) AND gp > 0
+                  ORDER BY min DESC""", (season, home, away))
+    r_rows = roster.to_dict("records")
+    rest = None
+    if "home_rest" in request.args and "away_rest" in request.args:
+        rest = (int(request.args["home_rest"]), int(request.args["away_rest"]))
+    fx = matchup.rest_effects(cached("situational", _situational)["rest"]) \
+        if _has("team_rest") else {}
+    H, A = t.loc[home].to_dict(), t.loc[away].to_dict()
+    pred = matchup.predict_game(
+        H, A, hca, lg, rest, fx,
+        [p for p in r_rows if p["team_id"] == home and p["player_id"] in out],
+        [p for p in r_rows if p["team_id"] == away and p["player_id"] in out])
+    p_road = NormalDist(0, matchup.GAME_SD).cdf(pred["spread"] - 2 * pred["factors"][1]["points"])
+    pred["series"] = _series_prob(pred["p_home"], p_road)
+    return ok({"home": H, "away": A, "hca": hca, "rest_effects": fx, "out": sorted(out),
+               "roster": r_rows, "blend": pred})
 
 
 @app.get("/api/analysis/situational")
@@ -697,6 +707,58 @@ def a_lineups():
                      net_rating, pace, efg_pct, ts_pct FROM lineups WHERE {where}
               ORDER BY net_rating DESC""", params)
     return ok({"rows": df})
+
+
+LINEUP_COLS = ["player_id", "player_name", "team_id", "min", "min_pg", "o_impact", "d_impact",
+               "impact", "fg3_pct", "fg3a_p100", "blk_p100", "height_in", "ast_pct", "usg_pct",
+               "dreb_pct"]
+
+
+@app.get("/api/analysis/lineup_builder")
+def a_lineup_builder():
+    from nbastats import matchup
+    season = arg_season()
+    tid = int(request.args["team"])
+    objective = request.args.get("objective", "net")
+    have = set(player_cols())
+    cols = [c for c in LINEUP_COLS if c in have]
+    pool = q(f"""SELECT {', '.join(cols)} FROM player_season_full
+                 WHERE season=? AND team_id=? AND min >= 200 ORDER BY min DESC LIMIT 13""",
+             (season, tid)).to_dict("records")
+    picked = [int(x) for x in request.args.get("players", "").split(",") if x.strip().isdigit()][:5]
+    chosen = [p for p in pool if p["player_id"] in picked]
+    rating = matchup.rate_lineup(chosen) if len(chosen) == 5 else None
+    best = matchup.best_lineups(pool, objective, top=5) if len(pool) >= 5 else []
+    actual = {}
+    if _has("lineups") and best + ([{"players": picked}] if rating else []):
+        lu = q("""SELECT group_id, min, net_rating FROM lineups WHERE season=? AND team_id=?""",
+               (season, tid))
+        for r in lu.itertuples(index=False):
+            actual[frozenset(matchup.lineup_ids(r.group_id))] = {"min": r.min, "net_rating": r.net_rating}
+    for b in best:
+        b["actual"] = actual.get(frozenset(b["players"]))
+    if rating:
+        rating["actual"] = actual.get(frozenset(picked))
+    return ok({"season": season, "pool": pool, "picked": picked, "rating": rating,
+               "best": best, "objective": objective})
+
+
+def _lineup_backtest():
+    from nbastats import matchup
+    if not _has("lineups"):
+        return {"n": 0}
+    lu = q("SELECT season, group_id, min, net_rating FROM lineups WHERE min >= 200")
+    imp = q("SELECT player_id, season, o_impact, d_impact FROM player_season_full "
+            "WHERE o_impact IS NOT NULL AND d_impact IS NOT NULL")
+    impact = {}
+    for r in imp.itertuples(index=False):
+        impact[(int(r.player_id), r.season)] = (float(r.o_impact), float(r.d_impact))
+    return matchup.backtest_lineups(lu.to_dict("records"), impact)
+
+
+@app.get("/api/analysis/lineup_backtest")
+def a_lineup_backtest():
+    return ok(cached("lineup_backtest", _lineup_backtest))
 
 
 # ------------------------------------------------------------------ predictions
